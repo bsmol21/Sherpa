@@ -1,6 +1,9 @@
 """
 ruta_optima.py  -  Calcula la ruta optima entre dos puntos sobre tu mapa de
-elevacion de Marte (.asc) usando el algoritmo de Dijkstra.
+elevacion de Marte (.asc) usando el algoritmo A* (da la misma ruta que Dijkstra, pero mas rapido).
+
+>> Para cambiar inicio/destino y la pendiente SIN reiniciar, y recorrer la
+>> ruta con la camara dentro del mapa 3D, usa el visor:  py visor_rutas.py
 
 La ruta "optima" es la de MENOR COSTO, y el costo tiene en cuenta:
   - la distancia real recorrida sobre el terreno (incluyendo subidas/bajadas)
@@ -19,6 +22,7 @@ import sys
 import os
 import csv
 import heapq
+import math
 import warnings
 from array import array
 
@@ -114,16 +118,88 @@ def reducir_promedio(mat, factor):
         return np.nanmean(bloques, axis=(1, 3))
 
 
+def cargar_terreno(ruta_archivo, tam_celda=None, max_celdas=None):
+    """Lee el .asc ya reducido a la resolucion de calculo, por bloques de
+    filas (no necesita cargar todo el archivo en memoria). El resultado se
+    guarda en un .npz al lado del .asc para que los siguientes arranques sean
+    instantaneos. Devuelve (z, celda, celda_original, (filas0, cols0))."""
+    tam = TAMANO_CELDA_CALCULO if tam_celda is None else tam_celda
+    tope = MAX_CELDAS if max_celdas is None else max_celdas
+    cache = f"{os.path.splitext(ruta_archivo)[0]}_cache_{tam:g}m.npz"
+    if (os.path.exists(cache)
+            and os.path.getmtime(cache) >= os.path.getmtime(ruta_archivo)):
+        d = np.load(cache)
+        print(f"Usando mapa en cache: {os.path.basename(cache)}")
+        return (d["z"], float(d["celda"]), float(d["celda0"]),
+                tuple(int(v) for v in d["forma0"]))
+
+    print("Leyendo archivo por bloques (solo la primera vez, luego usa cache)...")
+    encabezado = {}
+    with open(ruta_archivo, "r") as f:
+        while True:
+            pos = f.tell()
+            partes = f.readline().split()
+            if len(partes) == 2 and partes[0].replace("_", "").isalpha():
+                encabezado[partes[0].lower()] = float(partes[1])
+            else:
+                f.seek(pos)
+                break
+        ncols = int(encabezado["ncols"])
+        nrows = int(encabezado["nrows"])
+        celda0 = encabezado["cellsize"]
+        nodata = np.float32(encabezado.get("nodata_value", -9999.0))
+
+        factor = max(1, int(round(tam / celda0)))
+        while (nrows // factor) * (ncols // factor) > tope:
+            factor += 1
+        nf, ncr = nrows // factor, ncols // factor
+        z = np.full((nf, ncr), np.nan, dtype=np.float32)
+
+        bloque = factor * ncols
+        pedazos, n_pend, fila_out = [], 0, 0
+        for linea in f:
+            v = np.array(linea.split(), dtype=np.float32)
+            pedazos.append(v)
+            n_pend += v.size
+            while n_pend >= bloque and fila_out < nf:
+                todo = np.concatenate(pedazos)
+                b, resto = todo[:bloque], todo[bloque:]
+                pedazos, n_pend = [resto], resto.size
+                b = b.reshape(factor, ncols)[:, :ncr * factor].copy()
+                b[(b == nodata) | (b < -1e30)] = np.nan
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    z[fila_out] = np.nanmean(b.reshape(factor, ncr, factor), axis=(0, 2))
+                fila_out += 1
+                if fila_out % 50 == 0:
+                    print(f"  {100 * fila_out / nf:.0f} %", end="\r", flush=True)
+            if fila_out >= nf:
+                break
+    print("  100 %")
+    celda = celda0 * factor
+    try:
+        np.savez(cache, z=z, celda=celda, celda0=celda0, forma0=np.array([nrows, ncols]))
+        print(f"Guardado cache: {os.path.basename(cache)}")
+    except OSError as e:
+        print(f"(No se pudo guardar el cache: {e})")
+    return z, celda, celda0, (nrows, ncols)
+
+
 # ------------------------ COSTOS Y DIJKSTRA ---------------------------
 VECINOS = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
 
 
-def calcular_costos(z, celda):
+def calcular_costos(z, celda, pendiente_maxima=None, peso_pendiente=None,
+                    factor_subida=None):
     """
     Para cada celda y cada una de sus 8 direcciones, calcula cuanto cuesta
     dar ese paso. Devuelve 8 listas (una por direccion). Un costo infinito
     significa "paso imposible" (fuera del mapa, sin dato, o demasiado empinado).
+    Los parametros que se dejan en None toman el valor de AJUSTES.
     """
+    pmax = PENDIENTE_MAXIMA if pendiente_maxima is None else pendiente_maxima
+    peso = PESO_PENDIENTE if peso_pendiente is None else peso_pendiente
+    fsub = FACTOR_SUBIDA if factor_subida is None else factor_subida
     nf, nc = z.shape
     zp = np.pad(z.astype(np.float64), 1, constant_values=np.nan)
     costos = []
@@ -135,10 +211,10 @@ def calcular_costos(z, celda):
             horiz = celda * np.hypot(dr, dc)                 # distancia en el plano
             dist3d = np.hypot(horiz, dz)                     # distancia sobre el terreno
             pend = np.degrees(np.arctan(np.abs(dz) / horiz)) # inclinacion del paso
-            factor = 1 + PESO_PENDIENTE * (pend / PENDIENTE_MAXIMA) ** 2
-            factor = np.where(dz > 0, factor * FACTOR_SUBIDA, factor)
+            factor = 1 + peso * (pend / pmax) ** 2
+            factor = np.where(dz > 0, factor * fsub, factor)
             costo = dist3d * factor
-            costo[pend > PENDIENTE_MAXIMA] = np.inf
+            costo[pend > pmax] = np.inf
             costo[np.isnan(costo)] = np.inf
             a = array("d")
             a.frombytes(costo.ravel().tobytes())
@@ -183,22 +259,67 @@ def dijkstra(costos, nf, nc, inicio, fin):
     return ruta, dist[fin]
 
 
+def astar(costos, nf, nc, inicio, fin, celda, factor_subida=None, cancelado=None):
+    """A* sobre la misma red que dijkstra(): da la misma ruta optima pero
+    explora muchas menos celdas, porque se guia por la distancia en linea
+    recta al destino (que nunca sobreestima el costo real).
+    `cancelado` es una funcion opcional; si devuelve True se aborta y se
+    devuelve (None, None). Si no hay camino devuelve (None, inf)."""
+    fsub = FACTOR_SUBIDA if factor_subida is None else factor_subida
+    escala = celda * min(1.0, fsub)          # asi la heuristica es admisible
+    N = nf * nc
+    INF = float("inf")
+    dist = array("d", [INF]) * N
+    previo = array("i", [-1]) * N
+    desplaz = [dr * nc + dc for dr, dc in VECINOS]
+    ff, cf = divmod(fin, nc)
+    hypot = math.hypot
+    push, pop = heapq.heappush, heapq.heappop
+
+    def h(i):
+        r, c = divmod(i, nc)
+        return escala * hypot(r - ff, c - cf)
+
+    dist[inicio] = 0.0
+    cola = [(h(inicio), 0.0, inicio)]
+    n = 0
+    while cola:
+        _, d, i = pop(cola)
+        if d > dist[i]:
+            continue
+        if i == fin:
+            break
+        n += 1
+        if cancelado is not None and n % 20000 == 0 and cancelado():
+            return None, None
+        for k in range(8):
+            c = costos[k][i]
+            if c == INF:
+                continue
+            j = i + desplaz[k]
+            nd = d + c
+            if nd < dist[j]:
+                dist[j] = nd
+                previo[j] = i
+                push(cola, (nd + h(j), nd, j))
+
+    if dist[fin] == INF:
+        return None, INF
+    ruta = [fin]
+    while ruta[-1] != inicio:
+        ruta.append(previo[ruta[-1]])
+    ruta.reverse()
+    return ruta, dist[fin]
+
+
 # ------------------------------- MAIN ---------------------------------
 def preparar(ruta_archivo):
     """Lee el mapa, lo reduce a la resolucion de calculo y prepara los costos."""
-    print("Leyendo archivo (puede tardar si es grande)...")
-    mat, celda0 = leer_asc(ruta_archivo)
-    filas0, cols0 = mat.shape
+    z, celda, celda0, (filas0, cols0) = cargar_terreno(ruta_archivo)
     print(f"Mapa original: {cols0} x {filas0} celdas de {celda0} m "
           f"({cols0*celda0/1000:.2f} x {filas0*celda0/1000:.2f} km)")
-
-    factor = max(1, int(round(TAMANO_CELDA_CALCULO / celda0)))
-    while (filas0 // factor) * (cols0 // factor) > MAX_CELDAS:
-        factor += 1
-    z = reducir_promedio(mat, factor)
-    celda = celda0 * factor
     nf, nc = z.shape
-    if factor > 1:
+    if celda > celda0 * 1.01:
         print(f"Para el calculo se usan celdas de {celda:.1f} m "
               f"({nc} x {nf} = {nc*nf:,} celdas)")
     if celda > TAMANO_CELDA_CALCULO * 1.5:
@@ -295,11 +416,11 @@ def calcular_y_mostrar(D, ini, fin, n):
     print(f"\nINICIO : x={ini[0]:.0f} m, y={ini[1]:.0f} m  (altura {z[celdas['INICIO']]:.1f} m)")
     print(f"DESTINO: x={fin[0]:.0f} m, y={fin[1]:.0f} m  (altura {z[celdas['DESTINO']]:.1f} m)")
     print(f"Pendiente maxima permitida: {PENDIENTE_MAXIMA} grados  |  peso de pendiente: {PESO_PENDIENTE}")
-    print("Buscando la ruta con Dijkstra (puede tardar unos segundos)...")
+    print("Buscando la ruta con A* (puede tardar unos segundos)...")
 
     i0 = celdas["INICIO"][0] * nc + celdas["INICIO"][1]
     i1 = celdas["DESTINO"][0] * nc + celdas["DESTINO"][1]
-    ruta, costo_total = dijkstra(D["costos"], nf, nc, i0, i1)
+    ruta, costo_total = astar(D["costos"], nf, nc, i0, i1, celda)
 
     if ruta is None:
         print("\nNO EXISTE RUTA entre esos puntos con una pendiente maxima de "

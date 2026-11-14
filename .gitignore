@@ -1,1 +1,3 @@
 mvp/Rutes/matriz_elevacion.asc
+mvp/Rutes/*_cache_*.npz
+__pycache__/

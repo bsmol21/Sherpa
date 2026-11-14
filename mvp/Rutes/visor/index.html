@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PathFinder · Visor de rutas</title>
+<style>
+  :root {
+    --bg: #120c0a;
+    --panel: rgba(22, 16, 14, 0.88);
+    --borde: rgba(255, 220, 190, 0.14);
+    --texto: #f1e6dc;
+    --tenue: #b9a596;
+    --acento: #4fd8e8;
+    --inicio: #5be36b;
+    --destino: #ff4d5e;
+    --peligro: #ff7a45;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg);
+    color: var(--texto); font: 13px/1.4 system-ui, "Segoe UI", sans-serif; }
+  #escena { position: fixed; inset: 0; display: block; }
+  #escena.colocando { cursor: crosshair; }
+
+  .caja { position: fixed; background: var(--panel); border: 1px solid var(--borde);
+    border-radius: 10px; backdrop-filter: blur(6px); }
+
+  #panel { top: 12px; left: 12px; width: 290px; padding: 14px; max-height: calc(100% - 24px);
+    overflow-y: auto; }
+  h1 { font-size: 15px; margin: 0 0 2px; letter-spacing: .3px; }
+  .sub { color: var(--tenue); margin: 0 0 12px; font-size: 12px; }
+  .grupo { border-top: 1px solid var(--borde); padding-top: 10px; margin-top: 10px; }
+  .etq { display: flex; justify-content: space-between; align-items: baseline;
+    color: var(--tenue); font-size: 12px; margin-bottom: 4px; }
+  .etq b { color: var(--texto); font-size: 14px; font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; accent-color: var(--acento); }
+  .seg { display: flex; gap: 6px; }
+  button { flex: 1; background: rgba(255,255,255,0.06); color: var(--texto);
+    border: 1px solid var(--borde); border-radius: 7px; padding: 7px 8px; cursor: pointer;
+    font: inherit; }
+  button:hover:not(:disabled) { background: rgba(255,255,255,0.12); }
+  button:disabled { opacity: .4; cursor: default; }
+  button.activo { border-color: currentColor; background: rgba(255,255,255,0.10); }
+  button.primario { background: var(--acento); color: #06222a; border-color: transparent;
+    font-weight: 600; }
+  button.primario:hover:not(:disabled) { background: #7ae6f1; }
+  #modoInicio { color: var(--inicio); }
+  #modoDestino { color: var(--destino); }
+  .punto { font-size: 12px; color: var(--tenue); font-variant-numeric: tabular-nums;
+    margin-top: 6px; }
+  .punto i { display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+    margin-right: 5px; vertical-align: -1px; }
+  label.chk { display: flex; gap: 6px; align-items: center; color: var(--tenue);
+    font-size: 12px; margin-top: 8px; cursor: pointer; }
+
+  #estado { font-size: 12px; min-height: 18px; }
+  #estado.error { color: var(--peligro); }
+  .giro { display: inline-block; width: 11px; height: 11px; border: 2px solid var(--acento);
+    border-right-color: transparent; border-radius: 50%; animation: g .7s linear infinite;
+    vertical-align: -2px; margin-right: 6px; }
+  @keyframes g { to { transform: rotate(360deg); } }
+  dl { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; margin: 8px 0 0;
+    font-size: 12px; }
+  dt { color: var(--tenue); }
+  dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+  .ayuda { color: var(--tenue); font-size: 11.5px; }
+  .ayuda kbd { background: rgba(255,255,255,.08); border: 1px solid var(--borde);
+    border-radius: 4px; padding: 0 4px; font: 11px ui-monospace, monospace; }
+
+  #minimapa { top: 12px; right: 12px; padding: 6px; }
+  #minimapa canvas { display: block; border-radius: 6px; cursor: crosshair; }
+
+  #cursor { left: 314px; bottom: 12px; padding: 5px 9px; font-size: 12px; color: var(--tenue);
+    font-variant-numeric: tabular-nums; pointer-events: none; }
+  #cursor:empty { display: none; }
+
+  #hud { left: 50%; transform: translateX(-50%); bottom: 12px; width: min(760px, calc(100% - 340px));
+    padding: 10px 12px; display: none; }
+  #hud.visible { display: block; }
+  .fila { display: flex; gap: 8px; align-items: center; }
+  .fila button { flex: none; }
+  #hudDatos { flex: 1; text-align: center; font-variant-numeric: tabular-nums; font-size: 12.5px; }
+  #perfil { display: block; width: 100%; height: 64px; margin-top: 8px; cursor: pointer; }
+  #velEtq { width: 64px; text-align: right; color: var(--tenue); font-variant-numeric: tabular-nums; }
+  #vel { width: 110px; }
+
+  #carga { position: fixed; inset: 0; display: grid; place-items: center; background: var(--bg);
+    z-index: 10; font-size: 14px; color: var(--tenue); }
+</style>
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<canvas id="escena"></canvas>
+<div id="carga"><div><span class="giro"></span>Cargando terreno…</div></div>
+
+<aside id="panel" class="caja">
+  <h1>PathFinder · Visor de rutas</h1>
+  <p class="sub">Haz clic en el terreno para colocar los puntos. La ruta se recalcula sola.</p>
+
+  <div class="etq">Clic coloca</div>
+  <div class="seg">
+    <button id="modoInicio" class="activo">● Inicio</button>
+    <button id="modoDestino">● Destino</button>
+    <button id="intercambiar" title="Intercambiar inicio y destino" style="flex:none">⇄</button>
+  </div>
+  <div class="punto" id="txtInicio"><i style="background:var(--inicio)"></i>Inicio: sin elegir</div>
+  <div class="punto" id="txtDestino"><i style="background:var(--destino)"></i>Destino: sin elegir</div>
+
+  <div class="grupo">
+    <div class="etq">Pendiente máxima (tolerancia) <b id="pendVal">15°</b></div>
+    <input id="pend" type="range" min="2" max="60" step="1" value="15">
+    <label class="chk"><input id="verProhibido" type="checkbox" checked> Marcar en rojo las zonas más empinadas que el límite</label>
+  </div>
+
+  <div class="grupo">
+    <div class="etq">Exageración vertical <b id="exagVal">×3</b></div>
+    <input id="exag" type="range" min="1" max="10" step="0.5" value="3">
+  </div>
+
+  <div class="grupo">
+    <div class="etq">Polvo en suspensión <b id="polvoVal">Despejado</b></div>
+    <input id="polvo" type="range" min="0" max="100" step="1" value="20">
+    <div class="etq" style="margin-top:6px">Altura del sol <b id="solVal">35°</b></div>
+    <input id="sol" type="range" min="0" max="90" step="1" value="35">
+    <label class="chk"><input id="remolinos" type="checkbox" checked> Remolinos de polvo</label>
+  </div>
+
+  <div class="grupo">
+    <div id="estado">Elige el inicio y el destino.</div>
+    <dl id="stats" hidden></dl>
+  </div>
+
+  <div class="grupo seg">
+    <button id="recorrer" class="primario" disabled>▶ Recorrer ruta</button>
+    <button id="general" style="flex:none" title="Vista general del mapa">⌂</button>
+    <button id="csv" style="flex:none" disabled title="Descargar la ruta como CSV">CSV</button>
+  </div>
+
+  <div class="grupo ayuda" id="ayudaOrbita">
+    <b>Explorar:</b> arrastra para girar, clic derecho para desplazar, rueda para acercar.
+    <kbd>R</kbd> recorre la ruta.
+  </div>
+  <div class="grupo ayuda" id="ayudaRuta" hidden>
+    <b>Recorriendo:</b> rueda = acercar/alejar · <kbd>Espacio</kbd> pausa · <kbd>←</kbd><kbd>→</kbd> avanzar/retroceder
+    (<kbd>Shift</kbd> = más) · <kbd>↑</kbd><kbd>↓</kbd> velocidad · <kbd>C</kbd> cámara ·
+    arrastra para mirar alrededor · doble clic centra la mirada · <kbd>Esc</kbd> salir.
+  </div>
+</aside>
+
+<div id="minimapa" class="caja"><canvas id="mini"></canvas></div>
+<div id="cursor" class="caja"></div>
+
+<div id="hud" class="caja">
+  <div class="fila">
+    <button id="play" title="Reproducir / pausar (Espacio)">⏸</button>
+    <button id="camara" title="Cambiar cámara (C)">Primera persona</button>
+    <div id="hudDatos"></div>
+    <input id="vel" type="range" min="0" max="8" step="1" value="3" title="Velocidad (↑/↓)">
+    <span id="velEtq"></span>
+    <button id="salir" title="Salir del recorrido (Esc)">✕</button>
+  </div>
+  <canvas id="perfil" title="Haz clic o arrastra para saltar a un punto de la ruta"></canvas>
+</div>
+
+<script type="module" src="visor.js"></script>
+</body>
+</html>
