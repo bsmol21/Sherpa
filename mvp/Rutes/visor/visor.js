@@ -5,6 +5,7 @@
 
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { crearCasco } from "./casco.js";
 
 const $ = (id) => document.getElementById(id);
 const VELOCIDADES = [1.5, 3, 5, 10, 25, 50, 100, 250, 500];   // m/s
@@ -301,14 +302,16 @@ function dibujarRuta3D() {
 
 // ---------------------------------------------------------- astronauta
 // Hecho con piezas simples. Mira hacia +Z; mide ~1,85 m.
-function crearAstronauta() {
-  const traje = new THREE.MeshStandardMaterial({ color: 0xf2f0ea, roughness: 0.75 });
-  const gris = new THREE.MeshStandardMaterial({ color: 0x8b8f96, roughness: 0.6, metalness: 0.3 });
-  const visor = new THREE.MeshStandardMaterial({ color: 0x3a2508, roughness: 0.15, metalness: 0.9,
+// Con `matUnico` todas las piezas usan ese material (lo usa el holograma).
+function crearAstronauta(matUnico = null) {
+  const std = (o) => matUnico ?? new THREE.MeshStandardMaterial(o);
+  const traje = std({ color: 0xf2f0ea, roughness: 0.75 });
+  const gris = std({ color: 0x8b8f96, roughness: 0.6, metalness: 0.3 });
+  const visor = std({ color: 0x3a2508, roughness: 0.15, metalness: 0.9,
     emissive: 0xc8871e, emissiveIntensity: 0.45 });
-  const rojo = new THREE.MeshStandardMaterial({ color: 0xc8402a, roughness: 0.6 });
+  const rojo = std({ color: 0xc8402a, roughness: 0.6 });
   const pieza = (geo, mat, x = 0, y = 0, z = 0) => {
-    const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = true; return m;
+    const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = !matUnico; return m;
   };
   const raiz = new THREE.Group(), cuerpo = new THREE.Group();
   raiz.add(cuerpo);
@@ -345,21 +348,10 @@ function crearAstronauta() {
   escena.add(raiz);
   return { raiz, cuerpo, pierI, pierD, brazI, brazD, fase: 0, amp: 0, rumbo: 0, pasoPrevio: 0 };
 }
-let astro;
+let astro, casco;
 
-function actualizarAstronauta(dt) {
-  const A = astro;
-  A.raiz.visible = !!E.ruta && !(E.siguiendo && E.cam === 0);
-  if (!E.ruta) return;
-  const p = enRuta(E.s), a = enRuta(E.s - 2), b = enRuta(E.s + 2);
-  const objetivo = Math.atan2(b.x - a.x, b.z - a.z);
-  let d = objetivo - A.rumbo;
-  d = Math.atan2(Math.sin(d), Math.cos(d));
-  A.rumbo += d * (1 - Math.exp(-dt * 8));
-  A.raiz.position.copy(p);
-  A.raiz.rotation.y = A.rumbo;
-
-  const andando = E.siguiendo && E.reproduciendo && E.s < E.ruta.total;
+// Ciclo de pasos: piernas, rodillas, brazos y el brinco de baja gravedad.
+function animarCaminata(A, dt, andando) {
   A.amp += ((andando ? 1 : 0) - A.amp) * (1 - Math.exp(-dt * 6));
   // A altas velocidades (camara rapida) el paso no sigue acelerando
   const vPaso = Math.min(VELOCIDADES[E.vel], 3);
@@ -376,6 +368,22 @@ function actualizarAstronauta(dt) {
   // Brinco de baja gravedad y respiracion en reposo
   A.cuerpo.position.y = A.amp * 0.07 * Math.abs(sF) + (1 - A.amp) * 0.006 * Math.sin(E.t * 2);
   A.cuerpo.rotation.x = A.amp * 0.08;
+}
+
+function actualizarAstronauta(dt) {
+  const A = astro;
+  A.raiz.visible = !!E.ruta && !(E.siguiendo && E.cam === 0);
+  if (!E.ruta) return;
+  const p = enRuta(E.s), a = enRuta(E.s - 2), b = enRuta(E.s + 2);
+  const objetivo = Math.atan2(b.x - a.x, b.z - a.z);
+  let d = objetivo - A.rumbo;
+  d = Math.atan2(Math.sin(d), Math.cos(d));
+  A.rumbo += d * (1 - Math.exp(-dt * 8));
+  A.raiz.position.copy(p);
+  A.raiz.rotation.y = A.rumbo;
+
+  const andando = E.siguiendo && E.reproduciendo && E.s < E.ruta.total;
+  animarCaminata(A, dt, andando);
 
   // Polvo al apoyar cada pie
   const paso = Math.floor(A.fase / Math.PI);
@@ -565,6 +573,7 @@ function crearRemolinos() {
 }
 function reiniciarRemolino(r, centro) {
   const d = r.userData, ang = Math.random() * Math.PI * 2, dist = 250 + Math.random() * 1500;
+  d.id = (d.id || 0) + 1;                       // para que Sherpa avise una vez por remolino
   d.wx = centro.x + Math.cos(ang) * dist; d.wz = centro.z + Math.sin(ang) * dist;
   d.vida = 0; d.dur = 35 + Math.random() * 50;
   d.alto = 90 + Math.random() * 220; d.radio = 4 + Math.random() * 6;
@@ -825,6 +834,7 @@ function ponerRuta(res) {
       Math.round((alto - res.y[i]) / celda - 0.5) * nc + Math.round(x / celda - 0.5));
     E.ruta = { ...res, cum, total: cum[cum.length - 1], sx: suavizar(res.x), sy: suavizar(res.y), celdas };
     E.s = Math.min(E.s, E.ruta.total);
+    casco.nuevaRuta();
   }
   $("recorrer").disabled = $("csv").disabled = !E.ruta || E.ruta.total <= 0;
   marcarCeldasRuta();
@@ -909,6 +919,14 @@ function entrarRecorrido() {
   colocarMarcadores();
   dibujarPerfil();
   actualizarHUD();
+  actualizarModoCasco();
+}
+
+// El casco (visor, HUD, holograma y Sherpa) solo existe en primera persona
+function actualizarModoCasco() {
+  const activo = E.siguiendo && E.cam === 0 && !!E.ruta;
+  document.body.classList.toggle("casco", activo);
+  casco.cambioModo(activo);
 }
 
 function salirRecorrido() {
@@ -921,6 +939,7 @@ function salirRecorrido() {
   $("recorrer").textContent = "▶ Recorrer ruta";
   colorear();
   colocarMarcadores();
+  actualizarModoCasco();
 }
 
 const ARRIBA = new THREE.Vector3(0, 1, 0);
@@ -929,7 +948,7 @@ function camaraDeseada(ojo, obj) {
   const mirar = dir.clone().applyAxisAngle(ARRIBA, E.yaw);
   const k = E.distPersec;
   if (E.cam === 0) {                       // primera persona: dentro del casco
-    ojo.copy(p).y += ALTURA_OJOS;
+    ojo.copy(p).y += ALTURA_OJOS + astro.amp * 0.04 * Math.abs(Math.sin(astro.fase));  // vaiven del paso
     obj.copy(ojo).addScaledVector(mirar, 25);
     const g = sueloMundo(obj.x, obj.z);
     obj.y = (Number.isNaN(g) ? p.y : g) + ALTURA_OJOS * 0.8 + Math.tan(E.pitch) * 25;
@@ -1086,6 +1105,7 @@ function cambiarCamara() {
   E.cam = (E.cam + 1) % CAMARAS.length;
   camara.fov = 55; camara.updateProjectionMatrix(); actualizarEscalaPuntos();
   actualizarHUD();
+  actualizarModoCasco();
 }
 
 addEventListener("keydown", (ev) => {
@@ -1102,6 +1122,8 @@ addEventListener("keydown", (ev) => {
     case "ArrowUp": E.vel = Math.min(VELOCIDADES.length - 1, E.vel + 1); $("vel").value = E.vel; break;
     case "ArrowDown": E.vel = Math.max(0, E.vel - 1); $("vel").value = E.vel; break;
     case "c": case "C": cambiarCamara(); break;
+    case "v": case "V": casco.alternarVoz(); break;
+    case "Tab": document.body.classList.toggle("ver-panel"); break;
     case "Home": E.s = 0; break;
     case "End": E.s = E.ruta.total; break;
     case "Escape": salirRecorrido(); break;
@@ -1142,6 +1164,7 @@ function cuadro() {
   } else {
     controles.update();
   }
+  casco.actualizar(dt);
   actualizarAtmosfera(dt);
   actualizarCursor();
   dibujarMinimapa();
@@ -1176,6 +1199,8 @@ async function iniciar() {
   crearMotas();
   crearBocanadas();
   crearRemolinos();
+  casco = crearCasco({ THREE, E, M, $, camara, enRuta, indiceEn, aMapa, sueloMundo, remolinos,
+    crearAstronauta, animarCaminata, VELOCIDADES });
   E.polvo = $("polvo").value / 100; E.solElev = +$("sol").value; E.remolinos = $("remolinos").checked;
   aplicarAtmosfera();
 
