@@ -3,12 +3,11 @@
 //     y del traje, proxima maniobra y avisos de pendiente.
 //   - Holograma de un astronauta que camina unos metros por delante, marcando la ruta.
 //   - Sherpa: mini asistente que comenta el recorrido (con voz opcional).
+//   - Panel VITALES y estado de emergencia (los calcula vitales.js en E.vit).
 // El marco del casco y el vidrio son HTML/CSS (ver index.html, #casco).
 
 const DIST_HOLO = 12;           // m por delante del astronauta
 const VEL_A_PIE = 1.2;          // m/s caminando con traje (para las estimaciones)
-const AUTONOMIA_O2_H = 8;       // horas de oxigeno con el traje lleno
-const AUTONOMIA_BAT_H = 10;
 
 export function crearCasco(ctx) {
   const { THREE, E, $, camara, enRuta, indiceEn, aMapa, sueloMundo } = ctx;
@@ -112,21 +111,22 @@ export function crearCasco(ctx) {
     return null;
   }
   const traje = () => {
-    const horas = E.s / VEL_A_PIE / 3600;
     const elev = E.solElev * Math.PI / 180;
-    return {
-      o2: Math.max(0, 100 - horas / AUTONOMIA_O2_H * 100),
-      bat: Math.max(0, 100 - horas / AUTONOMIA_BAT_H * 100),
-      temp: Math.round(-85 + 65 * Math.sin(elev) - 6 * E.polvo),
-    };
+    return { temp: Math.round(-85 + 65 * Math.sin(elev) - 6 * E.polvo) };
   };
 
   // ------------------------------------------------------- Sherpa
-  const sh = { cola: [], txt: "", pos: 0, espera: 0, vistos: new Set(), voz: false };
+  const sh = { cola: [], txt: "", pos: 0, espera: 0, vistos: new Set(), voz: false, urg: false };
+  const urgentes = new WeakSet();
   const shPanel = $("hcSherpa"), shTxt = $("hcSherpaTxt");
   function decir(texto, clave, urgente = false) {
     if (clave) { if (sh.vistos.has(clave)) return; sh.vistos.add(clave); }
-    if (urgente) sh.cola.unshift(texto); else sh.cola.push(texto);
+    const m = new String(texto);
+    if (urgente) {
+      urgentes.add(m);
+      sh.cola.unshift(m);
+      if (sh.txt && !sh.urg) sh.txt = "";               // un aviso urgente corta un comentario normal
+    } else sh.cola.push(m);
     if (sh.cola.length > 4) sh.cola.length = 4;          // que no se acumule
   }
   function hablar(texto) {
@@ -140,7 +140,8 @@ export function crearCasco(ctx) {
   }
   function actualizarSherpa(dt) {
     if (!sh.txt && sh.cola.length && activo) {
-      sh.txt = sh.cola.shift(); sh.pos = 0; sh.espera = 0;
+      const m = sh.cola.shift();
+      sh.txt = String(m); sh.urg = urgentes.has(m); sh.pos = 0; sh.espera = 0;
       shPanel.classList.add("hablando");
       hablar(sh.txt);
     }
@@ -235,8 +236,9 @@ export function crearCasco(ctx) {
       "Sigue al holograma.", "hola");
     vigilarGeologia();
     vigilarSuelo();
-    if (falta <= 1) return decir("Has llegado al destino. Buen trabajo.", "fin", true);
-    if (falta < 150) decir(`El destino está a ${fmtDist(falta)}.`, "casi");
+    const aRefugio = E.vit && (E.vit.emergencia || E.vit.enRefugio);
+    if (falta <= 1 && !aRefugio) return decir("Has llegado al destino. Buen trabajo.", "fin", true);
+    if (falta < 150) decir(`${aRefugio ? "El refugio" : "El destino"} está a ${fmtDist(falta)}.`, "casi");
     for (const h of [25, 50, 75]) {
       if (E.s >= total * h / 100 && E.s < total * h / 100 + 300) {
         decir(h === 50 ? `Mitad del camino. Quedan ${fmtDist(falta)}, unas ${fmtTiempo(falta)}.`
@@ -256,7 +258,6 @@ export function crearCasco(ctx) {
       decir("Tormenta de polvo: la visibilidad es baja. No te salgas de la ruta.", null, true);
     } else if (E.polvo < 0.4) polvoAvisado = false;
     if (E.solElev < 8) decir(`El sol está muy bajo; la temperatura exterior es de ${t.temp} °C.`, "sol");
-    if (t.o2 < 30) decir(`Oxígeno al ${Math.round(t.o2)} %. Vigila la reserva.`, "o2", true);
     // Remolinos de polvo cercanos
     for (const rem of ctx.remolinos) {
       const u = rem.userData;
@@ -278,7 +279,13 @@ export function crearCasco(ctx) {
     if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
     return k;
   }
-  const HOLO = "#6ff3ff", AVISO = "#ffb36b";
+  const HOLO = "#6ff3ff", AVISO = "#ffb36b", VERDE = "#7cffb2";
+  // Refugio que importa ahora: al que vamos, el propuesto o el mejor
+  const refugioFoco = () => {
+    const V = E.vit;
+    if (!V || !E.refugios) return null;
+    return V.emergencia ?? V.enRefugio ?? V.propuesta?.ref ?? V.mejor?.ref ?? null;
+  };
 
   function dibujarBrujula(rumbo) {
     const k = ajustarLienzo(brujula), g = brujula.getContext("2d"), W = brujula.width, H = brujula.height;
@@ -310,7 +317,10 @@ export function crearCasco(ctx) {
     const pa = enRuta(E.s), pb = enRuta(Math.min(E.ruta.total, E.s + 40));
     marca(Math.atan2(pb.x - pa.x, -(pb.z - pa.z)), HOLO, false);
     const [xm, ym] = aMapa(pa.x, pa.z);
-    marca(Math.atan2(E.destino[0] - xm, E.destino[1] - ym), "#ff6b7a", true);
+    const dest = E.vit?.emergencia ? null : E.destino;
+    if (dest) marca(Math.atan2(dest[0] - xm, dest[1] - ym), "#ff6b7a", true);
+    const rf = refugioFoco();
+    if (rf) marca(Math.atan2(rf.x - xm, rf.y - ym), VERDE, true);
     // Rumbo actual
     g.fillStyle = HOLO; g.shadowColor = HOLO;
     g.fillRect(W / 2 - k, H * 0.5, 2 * k, H * 0.5);
@@ -349,6 +359,19 @@ export function crearCasco(ctx) {
     const ph = enRuta(Math.min(r.total, E.s + DIST_HOLO)), [hx, hy] = aPant(...aMapa(ph.x, ph.z));
     g.fillStyle = HOLO; g.beginPath(); g.arc(hx, hy, 3 * k, 0, Math.PI * 2); g.fill();
     g.restore();
+    // Refugios (verde): dentro del radar o en el borde con su direccion
+    const foco = refugioFoco();
+    for (const rf of E.refugios || []) {
+      let [rx, ry] = aPant(rf.x, rf.y);
+      const rd = Math.hypot(rx - cx, ry - cy);
+      if (rd > R - 6 * k) {
+        if (rf !== foco) continue;                    // fuera del radar solo se marca el importante
+        rx = cx + (rx - cx) / rd * (R - 6 * k); ry = cy + (ry - cy) / rd * (R - 6 * k);
+      }
+      const l = (rf === foco ? 5 : 3.5) * k;
+      g.fillStyle = g.shadowColor = VERDE; g.shadowBlur = 6 * k;
+      g.fillRect(rx - l, ry - l, 2 * l, 2 * l);
+    }
     // Destino: dentro del radar o en el borde con su direccion
     let [dx, dy] = aPant(E.destino[0], E.destino[1]);
     const dd = Math.hypot(dx - cx, dy - cy);
@@ -382,13 +405,7 @@ export function crearCasco(ctx) {
       ${barra(pend / E.tol * 100, pend > E.tol * 0.8)}
       ${ug ? `<div class="fila-hc"><span>Geología</span><b>${ug.codigo}</b></div>` : ""}
       ${su ? `<div class="fila-hc"><span>Suelo</span><b class="${su.clase.riesgo === "alto" ? "aviso" : ""}">${su.clase.clave} · ${Math.round(su.ti)}</b></div>` : ""}`;
-    $("hcTraje").innerHTML = `<h3>TRAJE</h3>
-      <div class="fila-hc"><span>O₂</span><b class="${t.o2 < 30 ? "aviso" : ""}">${Math.round(t.o2)} %</b></div>
-      ${barra(t.o2, t.o2 < 30)}
-      <div class="fila-hc"><span>Batería</span><b>${Math.round(t.bat)} %</b></div>
-      ${barra(t.bat, t.bat < 25)}
-      <div class="fila-hc"><span>Temp. ext.</span><b>${t.temp} °C</b></div>
-      <div class="fila-hc"><span>Polvo</span><b class="${E.polvo > 0.6 ? "aviso" : ""}">${Math.round(E.polvo * 100)} %</b></div>`;
+    escribirVitales(t);
     // Proxima maniobra
     let flecha = "↑", texto = falta < 2 ? "Destino alcanzado" : `Sigue la ruta · ${fmtDist(Math.min(falta, 300))}`;
     let giroDeg = 0;
@@ -401,6 +418,46 @@ export function crearCasco(ctx) {
     $("hcFlecha").style.transform = `rotate(${giroDeg}deg)`;
     $("hcManiobra").textContent = texto;
     $("hcAviso").textContent = cuesta ? `⚠ Pendiente de ${cuesta.pend.toFixed(0)}° en ${fmtDist(cuesta.d)}` : "";
+  }
+
+  // Panel VITALES (a la derecha) y franja de estado de emergencia
+  function escribirVitales(t) {
+    const V = E.vit, el = $("hcTraje"), est = $("hcEstado");
+    if (!V || !E.refugios) {                          // sin refugios: solo el entorno
+      el.innerHTML = `<h3>ENTORNO</h3>
+        <div class="fila-hc"><span>Temp. ext.</span><b>${t.temp} °C</b></div>
+        <div class="fila-hc"><span>Polvo</span><b class="${E.polvo > 0.6 ? "aviso" : ""}">${Math.round(E.polvo * 100)} %</b></div>`;
+      est.textContent = ""; est.className = "";
+      return;
+    }
+    const fila = (n, v, aviso) => `<div class="fila-hc"><span>${n}</span><b class="${aviso ? "aviso" : ""}">${v}</b></div>`;
+    const fm = (m) => !isFinite(m) || m > 600 ? "> 10 h" : m >= 60 ? `${Math.floor(m / 60)} h ${Math.round(m % 60)}` : `${Math.round(m)} min`;
+    const seguroAviso = V.mejor ? V.seguro - V.mejor.eta < 25 : isFinite(V.seguro);
+    el.innerHTML = `<h3>VITALES</h3>
+      ${fila("Pulso", `${Math.round(V.fc)} lpm`, V.fc > 148)}
+      ${barra((V.fc - 50) / 140 * 100, V.fc > 148)}
+      ${fila("Esfuerzo", `${Math.round(V.met)} W`, V.intensidad > 0.7)}
+      ${fila("Temp. corp.", `${V.tc.toFixed(1)} °C`, V.tc > 38.3 || V.tc < 36)}
+      ${fila("SpO₂", `${Math.round(V.spo2)} %`, V.spo2 < 92)}
+      ${fila("Fatiga", `${Math.round(V.fatiga)} %`, V.fatiga > 70)}
+      ${barra(V.fatiga, V.fatiga > 70)}
+      ${fila("Dosis", `${V.dosis.toFixed(2)} mSv`, V.dosis > 10)}
+      ${fila("Temp. ext.", `${t.temp} °C`, false)}
+      ${fila("Polvo", `${Math.round(E.polvo * 100)} %`, E.polvo > 0.6)}
+      <div class="sep-hc"></div>
+      ${fila("T. seguro", fm(V.seguro), seguroAviso)}
+      ${V.limita ? `<div class="tenue chico">limita: ${V.limita}</div>` : ""}
+      ${V.emergencia ? fila("Vas al", `${V.emergencia.nombre.replace("Refugio ", "")} · ${fm((E.ruta.total - E.s) / VEL_A_PIE / 60)}`, true)
+        : V.enRefugio ? fila("Refugio", `${V.enRefugio.nombre.replace("Refugio ", "")} · a salvo`, false)
+        : fila("Refugio", V.mejor ? `${V.mejor.ref.nombre.replace("Refugio ", "")} · ${fm(V.mejor.eta)}` : "—", !V.mejor)}
+      ${V.tormenta ? fila("Tormenta", V.tTormenta <= 0 ? "encima" : fm(V.tTormenta), V.tTormenta < 30) : ""}`;
+    const nom = { normal: "", precaucion: "▲ PRECAUCIÓN", alerta: "■ ALERTA", critico: "■ EMERGENCIA" }[V.nivel];
+    let txt = nom ? `${nom} · ${V.causa}` : "";
+    if (V.emergencia) txt = `■ RUTA DE EMERGENCIA → ${V.emergencia.nombre}` + (V.causa ? ` · ${V.causa}` : "");
+    else if (V.enRefugio) txt = `● A SALVO EN ${V.enRefugio.nombre.toUpperCase()}`;
+    else if (V.propuesta) txt += ` · Ir al ${V.propuesta.ref.nombre} (${fm(V.propuesta.eta)}): pulsa A`;
+    est.textContent = txt;
+    est.className = V.enRefugio ? "ok" : V.emergencia ? "critico" : V.nivel;
   }
 
   // ------------------------------------------------------- ciclo
@@ -431,14 +488,17 @@ export function crearCasco(ctx) {
   return {
     actualizar,
     alternarVoz,
+    decir,
     cambioModo(on) {
       if (!on && "speechSynthesis" in window) speechSynthesis.cancel();
       reloj = 1;                                  // refrescar datos en el siguiente cuadro
     },
-    nuevaRuta() {                                 // ruta nueva: se olvidan los avisos anteriores
+    nuevaRuta(emergencia = false) {               // ruta nueva: se olvidan los avisos anteriores
       const yaSaludo = sh.vistos.has("hola");
-      sh.vistos.clear(); sh.cola.length = 0;
-      if (yaSaludo) {
+      sh.vistos.clear();
+      if (!emergencia) sh.cola.length = 0;        // en emergencia se conserva el aviso que la explica
+      if (yaSaludo || emergencia) sh.vistos.add("hola");
+      if (yaSaludo && !emergencia) {
         sh.vistos.add("hola");
         decir(`Ruta recalculada: ${fmtDist(E.ruta.total)} con pendiente máxima de ${E.tol}°.`, null, true);
       }
