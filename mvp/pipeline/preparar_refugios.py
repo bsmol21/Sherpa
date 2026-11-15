@@ -24,6 +24,8 @@ tormenta de polvo o un evento de radiacion solar. Se elige en dos pasos:
      baja con la fraccion de cielo bloqueada).
    - Suelo firme (THEMIS, inercia termica): roca o suelo compacto, no arena
      fina donde se hunden las botas y se levanta polvo.
+   - Muy plano (DTM HiRISE): ademas del filtro, suma puntos cuanto menos
+     pendiente tenga (evita quedar justo al pie de la pared).
    - Sin hondonada (DTM HiRISE): no en el fondo de un hoyo, donde de noche se
      acumula el aire frio y el polvo se deposita.
 
@@ -82,7 +84,7 @@ HONDONADA_MAX = 25.0       # m por debajo del entorno = hondonada fuerte
 # Puntuacion de suelo segun inercia termica (J m-2 K-1 s-1/2)
 SUELO_PUNTOS = [(150, 0.0), (250, 0.45), (350, 0.9), (math.inf, 1.0)]
 
-PESOS = dict(proteccion=0.45, suelo=0.30, sin_hondonada=0.25)
+PESOS = dict(proteccion=0.40, suelo=0.25, sin_hondonada=0.15, plano=0.20)
 PUNTUACION_MINIMA = 0.45   # candidatos por debajo de esto no se consideran
 SEPARACION_MIN = 500.0     # m entre refugios (en linea recta)
 # ======================================================================
@@ -246,8 +248,11 @@ def main():
         p_suelo = np.full((nf, nc), 0.5)
         print("(Sin suelo.json: el suelo cuenta como neutro.)")
 
+    # cuanto mas plano mejor (no solo pasar el filtro): asi el refugio no queda
+    # pegado al pie de la pared, donde la pendiente ya empieza a subir
+    plano = np.clip(1 - pend_local / PEND_LOCAL_MAX, 0, 1)
     puntaje = (PESOS["proteccion"] * proteccion + PESOS["suelo"] * p_suelo
-               + PESOS["sin_hondonada"] * sin_hondonada)
+               + PESOS["sin_hondonada"] * sin_hondonada + PESOS["plano"] * plano)
     candidato = validos & (pend_local <= PEND_LOCAL_MAX) & (pend <= PEND_LOCAL_MAX + 4) \
         & (puntaje >= PUNTUACION_MINIMA)
     # que no este pegado al borde (el horizonte ahi esta incompleto)
