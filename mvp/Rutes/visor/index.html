@@ -159,6 +159,33 @@
     color: var(--holo); background: transparent; border: 1px solid var(--holo-suave); border-radius: 4px; }
   #hcSherpaTxt { min-height: 34px; font-size: 12.5px; }
 
+  /* ------------------------------------------- vitales y emergencia */
+  :root { --verde: #7cffb2; --ambar: #ffd166; --rojo: #ff5b6b; }
+  .sep-hc { border-top: 1px solid var(--holo-suave); margin: 6px 0 4px; }
+  .hc .chico { font-size: 10.5px; margin-top: -2px; }
+  #hcEstado { margin-top: 4px; font-size: 13px; font-weight: 600; letter-spacing: 0.5px; padding: 0 10px;
+    border-radius: 4px; display: inline-block; }
+  #hcEstado:empty { display: none; }
+  #hcEstado.precaucion { color: var(--ambar); text-shadow: 0 0 6px rgba(255, 200, 80, 0.7); }
+  #hcEstado.alerta { color: var(--holo-aviso); text-shadow: 0 0 6px rgba(255, 140, 60, 0.8);
+    border: 1px solid var(--holo-aviso); }
+  #hcEstado.critico { color: #fff; background: rgba(200, 30, 45, 0.55); border: 1px solid var(--rojo);
+    text-shadow: none; animation: parpadeo 1s steps(2) infinite; }
+  #hcEstado.ok { color: var(--verde); text-shadow: 0 0 6px rgba(120, 255, 170, 0.7); }
+  @keyframes parpadeo { 50% { background: rgba(200, 30, 45, 0.25); } }
+  body.casco.con-demo .hc { bottom: 215px; }
+  #demo { margin-top: 8px; gap: 6px; flex-wrap: wrap; }
+  #demo[hidden] { display: none; }
+  #demo .tit { color: var(--tenue); font-size: 11.5px; }
+  #demo button { padding: 4px 8px; font-size: 12px; }
+  #demo button.activo { color: var(--ambar); }
+  #aceptar { background: var(--holo-aviso); color: #2a1404; border-color: transparent; font-weight: 600; }
+  #vitLinea { flex: 1 1 100%; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--tenue); }
+  #vitLinea b { color: var(--texto); }
+  #vitLinea.nivel-precaucion b { color: var(--ambar); }
+  #vitLinea.nivel-alerta b, #vitLinea.nivel-alerta span { color: var(--holo-aviso); }
+  #vitLinea.nivel-critico b, #vitLinea.nivel-critico span { color: var(--rojo); }
+
   #carga { position: fixed; inset: 0; display: grid; place-items: center; background: var(--bg);
     z-index: 10; font-size: 14px; color: var(--tenue); }
 </style>
@@ -238,6 +265,8 @@
     (<kbd>Shift</kbd> = más) · <kbd>↑</kbd><kbd>↓</kbd> velocidad · <kbd>C</kbd> cámara ·
     arrastra para mirar alrededor · doble clic centra la mirada · <kbd>Esc</kbd> salir.
     En primera persona: <kbd>V</kbd> voz de Sherpa · <kbd>Tab</kbd> mostrar este panel.
+    Simular: <kbd>1</kbd> tormenta · <kbd>2</kbd> evento solar · <kbd>3</kbd> fatiga · <kbd>4</kbd> SpO₂ baja ·
+    <kbd>0</kbd> reiniciar · <kbd>A</kbd> aceptar ruta al refugio.
   </div>
 </aside>
 
@@ -259,6 +288,7 @@
       <div><span id="hcFlecha">↑</span></div>
       <div id="hcManiobra"></div>
       <div id="hcAviso"></div>
+      <div id="hcEstado"></div>
     </div>
     <div id="hcSherpa">
       <svg class="avatar" viewBox="0 0 48 48">
@@ -302,6 +332,17 @@
     <button id="salir" title="Salir del recorrido (Esc)">✕</button>
   </div>
   <canvas id="perfil" title="Haz clic o arrastra para saltar a un punto de la ruta"></canvas>
+  <!-- Solo aparece si existe datos/procesados/refugios.json -->
+  <div id="demo" class="fila" hidden>
+    <div id="vitLinea"></div>
+    <span class="tit">Simular:</span>
+    <button id="evTormenta" title="Tormenta de polvo (1)">⛈ Tormenta</button>
+    <button id="evSolar" title="Evento de partículas solares (2)">☢ Evento solar</button>
+    <button id="evFatiga" title="Agotamiento (3)">♥ Fatiga</button>
+    <button id="evHipoxia" title="Baja de oxígeno en sangre (4)">SpO₂ ↓</button>
+    <button id="evReiniciar" title="Reiniciar signos vitales y clima (0)">↺</button>
+    <button id="aceptar" hidden>Ir al refugio (A)</button>
+  </div>
 </div>
 
 <script type="module" src="visor.js"></script>

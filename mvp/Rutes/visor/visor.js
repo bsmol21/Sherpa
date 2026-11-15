@@ -6,6 +6,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { crearCasco } from "./casco.js";
+import { crearVitales } from "./vitales.js";
 
 const $ = (id) => document.getElementById(id);
 const VELOCIDADES = [1.5, 3, 5, 10, 25, 50, 100, 250, 500];   // m/s
@@ -18,6 +19,8 @@ const E = {
   exag: 3, tol: 15, verProhibido: true,
   geo: null, verGeo: false,                     // capa geologica opcional {unidades, celdas, ...}
   suelo: null, verSuelo: false,                 // capa opcional de suelo {clases, ti, clase, polvo, ...}
+  refugios: null,                               // refugios fijos (datos/procesados/refugios.json)
+  vit: null,                                    // signos vitales y emergencia (vitales.js)
   modo: "inicio", inicio: null, destino: null,  // puntos en metros [x, y]
   ruta: null,                                   // {x,y,z,pend,cum,total,stats,sx,sy,celdas}
   peticion: 0,
@@ -256,16 +259,45 @@ function crearPin(color) {
   escena.add(g);
   return g;
 }
-let pinInicio, pinDestino, cinta, texCinta;
+let pinInicio, pinDestino, cinta, texCinta, pinesRefugio = [];
+
+// Refugio: pin verde con su letra encima
+const COLOR_REFUGIO = 0x7cffb2;
+function crearPinRefugio(letra) {
+  const g = crearPin(COLOR_REFUGIO);
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = 64;
+  const c = cv.getContext("2d");
+  c.fillStyle = "rgba(10,40,25,0.85)"; c.beginPath(); c.arc(32, 32, 28, 0, 7); c.fill();
+  c.strokeStyle = "#7cffb2"; c.lineWidth = 4; c.stroke();
+  c.fillStyle = "#7cffb2"; c.font = "bold 38px system-ui"; c.textAlign = "center"; c.textBaseline = "middle";
+  c.fillText(letra, 32, 34);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const et = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, fog: false }));
+  et.position.y = 1.55; et.scale.setScalar(0.7); et.renderOrder = 5;
+  g.add(et);
+  return g;
+}
+const letraRefugio = (r) => r.nombre.replace(/^Refugio\s*/i, "").slice(0, 2) || String(r.id);
 
 function colocarMarcadores() {
-  for (const [pin, p] of [[pinInicio, E.inicio], [pinDestino, E.destino]]) {
+  const haciaRefugio = E.vit && (E.vit.emergencia || E.vit.enRefugio);
+  for (const [pin, p] of [[pinInicio, E.inicio], [pinDestino, haciaRefugio ? null : E.destino]]) {
     if (!p) { pin.visible = false; continue; }
     aMundo(p[0], p[1], alturaMapa(p[0], p[1]) || M().zmin, pin.position);
     // Durante el recorrido los pines se hacen pequenos para no tapar la vista
     pin.scale.setScalar(E.siguiendo ? 12 : S());
     pin.visible = true;
   }
+  (E.refugios || []).forEach((r, k) => {
+    const pin = pinesRefugio[k];
+    if (!pin) return;
+    aMundo(r.x, r.y, alturaMapa(r.x, r.y) || r.z, pin.position);
+    const elegido = E.vit && (E.vit.emergencia?.id === r.id || E.vit.enRefugio?.id === r.id);
+    pin.scale.setScalar((E.siguiendo ? 10 : S() * 0.9) * (elegido ? 1.3 : 1));
+    pin.visible = true;
+  });
 }
 
 // Textura de la cinta: banda translucida con bordes y flechas (sentido de avance)
@@ -377,7 +409,7 @@ function crearAstronauta(matUnico = null) {
   escena.add(raiz);
   return { raiz, cuerpo, pierI, pierD, brazI, brazD, fase: 0, amp: 0, rumbo: 0, pasoPrevio: 0 };
 }
-let astro, casco;
+let astro, casco, vitales;
 
 // Ciclo de pasos: piernas, rodillas, brazos y el brinco de baja gravedad.
 function animarCaminata(A, dt, andando) {
@@ -719,6 +751,49 @@ function dibujarMinimapa() {
     E.ruta.x.forEach((x, i) => (i ? ctx.lineTo : ctx.moveTo).call(ctx, px(x), py(E.ruta.y[i])));
     ctx.stroke();
   }
+  // Tormenta: zona ya cubierta por el frente (semiplano)
+  const V = E.vit;
+  if (V && V.tormenta) {
+    const { d, frente0, t0 } = V.tormenta, f = frente0 + 2.5 * (V.t - t0);
+    // puntos del borde del mapa ordenados; nos quedamos con los cubiertos (dot <= f)
+    const esq = [[0, 0], [M().ancho, 0], [M().ancho, M().alto], [0, M().alto]];
+    const poli = [];
+    for (let k = 0; k < 4; k++) {
+      const a = esq[k], b = esq[(k + 1) % 4];
+      const da = a[0] * d[0] + a[1] * d[1] - f, db = b[0] * d[0] + b[1] * d[1] - f;
+      if (da <= 0) poli.push(a);
+      if ((da < 0) !== (db < 0)) {
+        const u = da / (da - db);
+        poli.push([a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u]);
+      }
+    }
+    if (poli.length > 2) {
+      ctx.fillStyle = "rgba(95,55,25,0.6)"; ctx.beginPath();
+      poli.forEach((q, i) => (i ? ctx.lineTo : ctx.moveTo).call(ctx, px(q[0]), py(q[1])));
+      ctx.closePath(); ctx.fill();
+      // linea del frente
+      const borde = poli.filter((q) => Math.abs(q[0] * d[0] + q[1] * d[1] - f) < 1e-3 * Math.max(M().ancho, M().alto));
+      if (borde.length >= 2) {
+        ctx.strokeStyle = "#ffb36b"; ctx.lineWidth = 2 * k; ctx.setLineDash([5 * k, 4 * k]);
+        ctx.beginPath(); ctx.moveTo(px(borde[0][0]), py(borde[0][1])); ctx.lineTo(px(borde[1][0]), py(borde[1][1]));
+        ctx.stroke(); ctx.setLineDash([]);
+      }
+    }
+  }
+  // Refugios: cuadrado verde con su letra (el elegido, mas grande)
+  for (const r of E.refugios || []) {
+    const elegido = V && (V.emergencia?.id === r.id || V.enRefugio?.id === r.id);
+    const propuesto = V && V.propuesta?.ref.id === r.id;
+    const sirve = V && V.evaluadas.find((o) => o.ref?.id === r.id);
+    const lado = (elegido ? 9 : 6.5) * k, x = px(r.x), y = py(r.y);
+    ctx.fillStyle = sirve && !sirve.sirve ? "#6b7a72" : "#7cffb2";
+    ctx.strokeStyle = elegido || propuesto ? "#fff" : "#000"; ctx.lineWidth = (elegido || propuesto ? 2 : 1) * k;
+    ctx.fillRect(x - lado, y - lado, 2 * lado, 2 * lado); ctx.strokeRect(x - lado, y - lado, 2 * lado, 2 * lado);
+    ctx.fillStyle = "#06221a"; ctx.font = `bold ${(elegido ? 11 : 9) * k}px system-ui`;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(letraRefugio(r), x, y + 0.5 * k);
+  }
+  ctx.textAlign = "start"; ctx.textBaseline = "alphabetic";
   for (const [p, col] of [[E.inicio, "#5be36b"], [E.destino, "#ff4d5e"]]) {
     if (!p) continue;
     ctx.fillStyle = col; ctx.strokeStyle = "#000"; ctx.lineWidth = k;
@@ -828,6 +903,7 @@ async function pedirRutaYa() {
     return mostrarEstado(res.error, true);
   }
   ponerRuta(res);
+  vitales?.nuevaRutaNormal();
   mostrarEstado(`Ruta con pendiente máxima de ${res.pendiente_maxima}°`);
 }
 
@@ -848,7 +924,7 @@ function suavizar(v, radio = 3, pasadas = 2) {
   return a;
 }
 
-function ponerRuta(res) {
+function ponerRuta(res, emergencia = false) {
   if (!res) {
     E.ruta = null;
     if (E.siguiendo) salirRecorrido();
@@ -863,7 +939,7 @@ function ponerRuta(res) {
       Math.round((alto - res.y[i]) / celda - 0.5) * nc + Math.round(x / celda - 0.5));
     E.ruta = { ...res, cum, total: cum[cum.length - 1], sx: suavizar(res.x), sy: suavizar(res.y), celdas };
     E.s = Math.min(E.s, E.ruta.total);
-    casco.nuevaRuta();
+    casco.nuevaRuta(emergencia);
   }
   $("recorrer").disabled = $("csv").disabled = !E.ruta || E.ruta.total <= 0;
   marcarCeldasRuta();
@@ -900,6 +976,37 @@ function descargarCSV() {
   a.download = `ruta_pend${E.tol}.csv`;
   a.click();
   URL.revokeObjectURL(a.href);
+}
+
+// ---------------------------------------------- rutas de emergencia
+// Cambia la ruta en curso por la del refugio (la calculo el servidor).
+function irARefugio(ruta, ref) {
+  E.peticion++;                               // anula cualquier ruta normal pendiente
+  clearTimeout(temporizador);
+  E.inicio = [ruta.x[0], ruta.y[0]];
+  E.destino = [ref.x, ref.y];
+  E.s = 0;
+  ponerRuta(ruta, true);
+  actualizarPuntos();
+  E.reproduciendo = true;
+  mostrarEstado(`Ruta de emergencia al ${ref.nombre}`);
+  actualizarHUD();
+}
+function ponerPolvo(q) {
+  E.polvo = Math.max(0, Math.min(1, q));
+  $("polvo").value = Math.round(E.polvo * 100);
+  aplicarAtmosfera();
+}
+async function cargarRefugios() {
+  try {
+    const meta = await (await fetch("/api/refugios")).json();
+    if (!meta.disponible) return;
+    E.refugios = meta.refugios;
+  } catch (e) { return; }
+  pinesRefugio = E.refugios.map((r) => crearPinRefugio(letraRefugio(r)));
+  colocarMarcadores();
+  $("demo").hidden = false;
+  document.body.classList.add("con-demo");
 }
 
 // --------------------------------------------------- recorrer la ruta
@@ -1000,6 +1107,19 @@ function actualizarHUD() {
   const n = (v) => Math.round(v).toLocaleString("es");
   $("hudDatos").innerHTML = `<b>${n(E.s)}</b> / ${n(r.total)} m · altura ${n(r.z[i])} m · ` +
     `pendiente <b style="color:${pend > E.tol * 0.8 ? "var(--peligro)" : "inherit"}">${pend.toFixed(1)}°</b>`;
+  const V = E.vit;
+  if (V && E.refugios) {
+    const nom = { normal: "Normal", precaucion: "Precaución", alerta: "Alerta", critico: "Crítico" }[V.nivel];
+    $("vitLinea").className = `nivel-${V.nivel}`;
+    $("vitLinea").innerHTML = V.preparando ? V.preparando
+      : `<b>${nom}</b> · ♥ ${Math.round(V.fc)} · tiempo seguro ${vitales.fmtMin(V.seguro)}` +
+        (V.mejor ? ` · ${V.mejor.ref.nombre} a ${vitales.fmtMin(V.mejor.eta)}` : "") +
+        (V.causa ? ` · <span>${V.causa}</span>` : "");
+    $("aceptar").hidden = !V.propuesta;
+    if (V.propuesta) $("aceptar").textContent = `Ir al ${V.propuesta.ref.nombre} (A)`;
+    for (const [id, on] of [["evFatiga", V.fatigaExtra], ["evHipoxia", V.hipoxia],
+      ["evTormenta", !!V.tormenta], ["evSolar", !!V.solar]]) $(id).classList.toggle("activo", on);
+  }
   $("play").textContent = E.reproduciendo ? "⏸" : "▶";
   $("camara").textContent = CAMARAS[E.cam];
   $("velEtq").textContent = `${VELOCIDADES[E.vel]} m/s`;
@@ -1197,6 +1317,11 @@ $("play").onclick = () => { E.reproduciendo = !E.reproduciendo; actualizarHUD();
 $("camara").onclick = () => cambiarCamara();
 $("salir").onclick = salirRecorrido;
 $("vel").addEventListener("input", (ev) => { E.vel = +ev.target.value; actualizarHUD(); });
+for (const [id, ev] of [["evTormenta", "tormenta"], ["evSolar", "solar"], ["evFatiga", "fatiga"],
+  ["evHipoxia", "hipoxia"], ["evReiniciar", "reiniciar"]]) {
+  $(id).onclick = () => { vitales.evento(ev); actualizarHUD(); };
+}
+$("aceptar").onclick = () => { vitales.aceptar(); actualizarHUD(); };
 
 function cambiarCamara() {
   E.cam = (E.cam + 1) % CAMARAS.length;
@@ -1221,6 +1346,12 @@ addEventListener("keydown", (ev) => {
     case "c": case "C": cambiarCamara(); break;
     case "v": case "V": casco.alternarVoz(); break;
     case "Tab": document.body.classList.toggle("ver-panel"); break;
+    case "1": if (E.refugios) vitales.evento("tormenta"); break;
+    case "2": if (E.refugios) vitales.evento("solar"); break;
+    case "3": if (E.refugios) vitales.evento("fatiga"); break;
+    case "4": if (E.refugios) vitales.evento("hipoxia"); break;
+    case "0": if (E.refugios) vitales.evento("reiniciar"); break;
+    case "a": case "A": vitales.aceptar(); break;
     case "Home": E.s = 0; break;
     case "End": E.s = E.ruta.total; break;
     case "Escape": salirRecorrido(); break;
@@ -1261,6 +1392,7 @@ function cuadro() {
   } else {
     controles.update();
   }
+  if (E.refugios) vitales.actualizar(dt);
   casco.actualizar(dt);
   actualizarAtmosfera(dt);
   actualizarCursor();
@@ -1298,6 +1430,7 @@ async function iniciar() {
   crearRemolinos();
   casco = crearCasco({ THREE, E, M, $, camara, enRuta, indiceEn, aMapa, sueloMundo, remolinos,
     crearAstronauta, animarCaminata, VELOCIDADES, unidadGeo, sueloEn });
+  vitales = crearVitales({ E, $, enRuta, aMapa, indiceEn, decir: casco.decir, irARefugio, ponerPolvo });
   E.polvo = $("polvo").value / 100; E.solElev = +$("sol").value; E.remolinos = $("remolinos").checked;
   aplicarAtmosfera();
 
@@ -1306,6 +1439,7 @@ async function iniciar() {
   construirTerreno();
   await cargarGeologia();
   await cargarSuelo();
+  await cargarRefugios();
   redimensionar();
   actualizarEscalaPuntos();
   vistaGeneral();

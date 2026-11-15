@@ -28,6 +28,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import numpy as np
 
 import geologia
+import refugios
 import ruta_optima as ro
 import suelo
 
@@ -111,6 +112,10 @@ class Motor:
                 "Prueba subir la tolerancia o mover los puntos (puede que uno "
                 "este rodeado de paredes empinadas)."))
 
+        return self.empaquetar(camino, costo, ini, fin, pend)
+
+    def empaquetar(self, camino, costo, ini, fin, pend):
+        """Convierte una lista de celdas en la respuesta que entiende el visor."""
         filas = np.array([i // self.nc for i in camino])
         cols = np.array([i % self.nc for i in camino])
         xs = (cols + 0.5) * self.celda
@@ -140,7 +145,7 @@ class Motor:
                 costo=float(costo)))
 
 
-def crear_handler(motor, geo=None, sue=None):
+def crear_handler(motor, geo=None, sue=None, ref=None):
     """`geo` y `sue` son las capas opcionales de geologia y de suelo/polvo
     (ver geologia.py y suelo.py); None = sin esa capa."""
     alturas = motor.z.astype("<f4").tobytes()   # NaN = sin datos
@@ -180,6 +185,8 @@ def crear_handler(motor, geo=None, sue=None):
                 self.end_headers()
                 self.wfile.write(geo["celdas"])
                 return
+            if self.path == "/api/refugios":
+                return self._json(ref.meta() if ref else dict(disponible=False))
             if self.path == "/api/suelo":
                 return self._json(sue["meta"] if sue else dict(disponible=False))
             if self.path == "/api/suelo_ti" and sue:
@@ -192,6 +199,8 @@ def crear_handler(motor, geo=None, sue=None):
             return super().do_GET()
 
         def do_POST(self):
+            if self.path == "/api/emergencia":
+                return self._emergencia()
             if self.path != "/api/ruta":
                 return self._json(dict(ok=False, error="No encontrado"), 404)
             try:
@@ -214,6 +223,23 @@ def crear_handler(motor, geo=None, sue=None):
             elif res.get("error"):
                 print(f"Sin ruta: {res['error']}")
             return self._json(res)
+
+        def _emergencia(self):
+            """Rutas desde un punto a TODOS los refugios, con tiempo a pie."""
+            if not ref:
+                return self._json(dict(ok=False, error="Sin refugios"), 404)
+            try:
+                n = int(self.headers.get("Content-Length", 0))
+                pet = json.loads(self.rfile.read(n) or b"{}")
+                desde = tuple(float(v) for v in pet["desde"])
+                pend = float(pet.get("pendiente_maxima", ro.PENDIENTE_MAXIMA))
+                pend = round(min(max(pend, PENDIENTE_MIN), PENDIENTE_TOPE), 1)
+            except (ValueError, KeyError, TypeError) as e:
+                return self._json(dict(ok=False, error=f"Peticion invalida: {e}"), 400)
+            try:
+                return self._json(ref.rutas_desde(desde, pend))
+            except Exception as e:   # que un error no tumbe el servidor
+                return self._json(dict(ok=False, error=f"Error interno: {e}"), 500)
 
     return Handler
 
@@ -241,13 +267,20 @@ def main():
             f"{c['nombre']} {c['pct']:.0f} %" for c in sue["meta"]["clases"]) +
             (f"  |  polvo superficial {p['nivel']}" if p else ""))
 
+    ref = None
+    datos_ref = refugios.cargar()                   # opcional: None si no hay refugios.json
+    if datos_ref:
+        ref = refugios.Refugios(datos_ref, motor, os.path.splitext(ruta_asc)[0])
+        print("Refugios: " + ", ".join(r["nombre"] for r in datos_ref["refugios"]))
+        ref.preparar(ro.PENDIENTE_MAXIMA)           # en segundo plano
+
     url = f"http://127.0.0.1:{PUERTO}/"
     # En Windows, SO_REUSEADDR deja abrir dos servidores en el mismo puerto sin error
     # (y no se sabe cual responde); asi detectamos si el visor ya esta abierto.
     if os.name == "nt":
         ThreadingHTTPServer.allow_reuse_address = False
     try:
-        servidor = ThreadingHTTPServer(("127.0.0.1", PUERTO), crear_handler(motor, geo, sue))
+        servidor = ThreadingHTTPServer(("127.0.0.1", PUERTO), crear_handler(motor, geo, sue, ref))
     except OSError:
         print(f"\nEl puerto {PUERTO} ya esta en uso: probablemente el visor ya esta abierto "
               f"en otra ventana. Abriendo {url} ...")
