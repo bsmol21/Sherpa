@@ -83,3 +83,5 @@ We wanted SHERPA to convey experience and guidance, not command. That shaped eve
 
 We used NASA open science data including **Digital Terrain Models (DTM)** from the HiRise instrument aboard MRO and layered views of the terrain from NASA’s Mars Trek online tool.
 
+## SHERPA Demonstration videos 
+https://drive.google.com/drive/folders/1tB4WUGTJldyntouwvUapNP3RfymdFuZl?usp=sharing
