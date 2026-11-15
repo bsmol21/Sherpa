@@ -5,6 +5,13 @@ Se corre UNA sola vez (o cuando cambie el mapa o las capas):
     py preparar_refugios.py            (5 refugios)
     py preparar_refugios.py 7          (otra cantidad)
 
+LOS REFUGIOS SON FIJOS: el resultado se guarda en refugios.json y el visor
+solo lee ese archivo, nunca los recalcula. Ademas el calculo es determinista
+(mismos datos y ajustes = mismos refugios). Si refugios.json ya existe, este
+script NO lo sobrescribe; para recalcular a proposito:
+
+    py preparar_refugios.py 5 --recalcular
+
 Un refugio es un lugar donde el astronauta puede esperar a que pase una
 tormenta de polvo o un evento de radiacion solar. Se elige en dos pasos:
 
@@ -198,8 +205,12 @@ def motivo(r):
 
 
 def main():
-    n_ref = int(sys.argv[1]) if len(sys.argv) > 1 else N_REFUGIOS
-    ruta_dem = sys.argv[2] if len(sys.argv) > 2 else DEM_DEFECTO
+    args = [a for a in sys.argv[1:] if a != "--recalcular"]
+    if os.path.exists(SALIDA) and "--recalcular" not in sys.argv:
+        sys.exit(f"Los refugios ya estan fijados en {SALIDA}.\n"
+                 "No se tocan. Para recalcularlos a proposito: py preparar_refugios.py 5 --recalcular")
+    n_ref = int(args[0]) if len(args) > 0 else N_REFUGIOS
+    ruta_dem = args[1] if len(args) > 1 else DEM_DEFECTO
     if not os.path.exists(ruta_dem):
         sys.exit(f"No encuentro el mapa de elevacion: {ruta_dem}")
     t0 = time.time()
