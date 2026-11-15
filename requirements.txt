@@ -1,0 +1,30 @@
+# SHERPA - Requisitos para una computadora nueva
+#
+# 1. Instalar Python con pip (entorno actual: Python 3.14.3).
+# 2. Abrir una terminal en la raiz del proyecto y ejecutar:
+#      py -m venv .venv
+#      .venv\Scripts\python.exe -m pip install -r requirements.txt
+# 3. Iniciar el visor desde la raiz:
+#      .venv\Scripts\python.exe mvp\Rutes\visor_rutas.py
+# 4. Abrir http://127.0.0.1:8765/ si no se abre automaticamente.
+#
+# En macOS/Linux: crear el entorno con python3 -m venv .venv y usar
+# .venv/bin/python en lugar de .venv\Scripts\python.exe.
+#
+# Se necesita un navegador con WebGL y conexion a internet para cargar
+# Three.js desde el CDN. Las voces dependen del navegador y del sistema.
+# El visor actual no requiere instalar Node.js, React ni QGIS.
+# Copiar tambien los datos del proyecto: mvp/Rutes/matriz_elevacion.asc,
+# la carpeta mvp/Rutes/visor y mvp/datos. Conservar los archivos de cache
+# .npz acelera el inicio, pero pueden regenerarse desde los datos originales.
+#
+# Dependencias directas, con las versiones instaladas en el entorno actual.
+
+# Calculo de terreno, rutas y procesamiento de datos.
+numpy==2.5.3
+
+# Graficos y visualizacion; ruta_optima.py lo importa al iniciar el visor.
+matplotlib==3.11.2
+
+# Lectura de imagenes en el pipeline de preparacion de suelo y polvo.
+Pillow==12.3.0
