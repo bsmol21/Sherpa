@@ -525,7 +525,9 @@ def calcular_y_mostrar(D, ini, fin, n):
 
 
 def main():
-    ruta_archivo = sys.argv[1] if len(sys.argv) > 1 else NOMBRE_ARCHIVO
+    ruta_archivo = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else NOMBRE_ARCHIVO
+    # Trabajar en la carpeta del script: ahi esta el mapa y ahi se guardan los resultados
+    os.chdir(os.path.dirname(os.path.abspath(__file__)))
     if not os.path.exists(ruta_archivo):
         print(f"\nNO ENCUENTRO EL ARCHIVO: {ruta_archivo}")
         print("Debe estar en la misma carpeta que este script.")

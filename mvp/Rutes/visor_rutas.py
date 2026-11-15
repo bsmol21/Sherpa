@@ -27,6 +27,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 import numpy as np
 
+import geologia
 import ruta_optima as ro
 
 PUERTO = 8765
@@ -138,7 +139,8 @@ class Motor:
                 costo=float(costo)))
 
 
-def crear_handler(motor):
+def crear_handler(motor, geo=None):
+    """`geo` es la capa geologica opcional (ver geologia.py); None = sin capa."""
     alturas = motor.z.astype("<f4").tobytes()   # NaN = sin datos
 
     class Handler(SimpleHTTPRequestHandler):
@@ -166,6 +168,15 @@ def crear_handler(motor):
                 self.send_header("Content-Length", str(len(alturas)))
                 self.end_headers()
                 self.wfile.write(alturas)
+                return
+            if self.path == "/api/geologia":
+                return self._json(geo["meta"] if geo else dict(disponible=False))
+            if self.path == "/api/geologia_celdas" and geo:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Length", str(len(geo["celdas"])))
+                self.end_headers()
+                self.wfile.write(geo["celdas"])
                 return
             return super().do_GET()
 
@@ -197,7 +208,9 @@ def crear_handler(motor):
 
 
 def main():
-    ruta_asc = sys.argv[1] if len(sys.argv) > 1 else ro.NOMBRE_ARCHIVO
+    # Por defecto el mapa se busca junto a este script, se ejecute desde donde se ejecute
+    carpeta = os.path.dirname(os.path.abspath(__file__))
+    ruta_asc = sys.argv[1] if len(sys.argv) > 1 else os.path.join(carpeta, ro.NOMBRE_ARCHIVO)
     if not os.path.exists(ruta_asc):
         print(f"\nNO ENCUENTRO EL ARCHIVO: {ruta_asc}")
         input("\nPulsa Enter para salir...")
@@ -206,9 +219,24 @@ def main():
     print(f"Terreno listo: {motor.nc} x {motor.nf} celdas de {motor.celda:.1f} m "
           f"({motor.ancho/1000:.2f} x {motor.alto/1000:.2f} km)")
     motor.costos(ro.PENDIENTE_MAXIMA)    # deja listos los costos por defecto
+    geo = geologia.cargar(motor.z, motor.celda)     # opcional: None si no hay capa
+    if geo:
+        print("Capa geologica: " + ", ".join(
+            f"{u['codigo']} {u['pct']:.0f} %" for u in geo["meta"]["unidades"]))
 
-    servidor = ThreadingHTTPServer(("127.0.0.1", PUERTO), crear_handler(motor))
     url = f"http://127.0.0.1:{PUERTO}/"
+    # En Windows, SO_REUSEADDR deja abrir dos servidores en el mismo puerto sin error
+    # (y no se sabe cual responde); asi detectamos si el visor ya esta abierto.
+    if os.name == "nt":
+        ThreadingHTTPServer.allow_reuse_address = False
+    try:
+        servidor = ThreadingHTTPServer(("127.0.0.1", PUERTO), crear_handler(motor, geo))
+    except OSError:
+        print(f"\nEl puerto {PUERTO} ya esta en uso: probablemente el visor ya esta abierto "
+              f"en otra ventana. Abriendo {url} ...")
+        print("Si quieres reiniciarlo, cierra la otra ventana (Ctrl+C) y vuelve a ejecutar esto.")
+        webbrowser.open(url)
+        return
     print(f"\nVisor abierto en {url}   (Ctrl+C para terminar)\n")
     threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     try:

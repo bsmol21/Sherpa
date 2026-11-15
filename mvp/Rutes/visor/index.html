@@ -53,6 +53,12 @@
   label.chk { display: flex; gap: 6px; align-items: center; color: var(--tenue);
     font-size: 12px; margin-top: 8px; cursor: pointer; }
 
+  #leyendaGeo { margin-top: 8px; font-size: 12px; }
+  #leyendaGeo .unidad { display: flex; gap: 7px; align-items: baseline; margin-bottom: 5px; }
+  #leyendaGeo .unidad i { flex: none; width: 10px; height: 10px; border-radius: 2px; }
+  #leyendaGeo .unidad small { display: block; color: var(--tenue); }
+  #leyendaGeo .nota { color: var(--tenue); font-size: 11px; margin: 6px 0 0; }
+
   #estado { font-size: 12px; min-height: 18px; }
   #estado.error { color: var(--peligro); }
   .giro { display: inline-block; width: 11px; height: 11px; border: 2px solid var(--acento);
@@ -196,6 +202,12 @@
     <div class="etq" style="margin-top:6px">Altura del sol <b id="solVal">35°</b></div>
     <input id="sol" type="range" min="0" max="90" step="1" value="35">
     <label class="chk"><input id="remolinos" type="checkbox" checked> Remolinos de polvo</label>
+  </div>
+
+  <!-- Solo aparece si existe datos/procesados/geologia.json -->
+  <div class="grupo" id="grupoGeo" hidden>
+    <label class="chk" style="margin-top:0"><input id="verGeo" type="checkbox"> Capa geológica (mapa global USGS)</label>
+    <div id="leyendaGeo" hidden></div>
   </div>
 
   <div class="grupo">

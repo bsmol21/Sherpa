@@ -16,6 +16,7 @@ const ALTURA_OJOS = 1.7;                                      // m, dentro del c
 const E = {
   meta: null, alt: null, pendCelda: null,       // terreno
   exag: 3, tol: 15, verProhibido: true,
+  geo: null, verGeo: false,                     // capa geologica opcional {unidades, celdas, ...}
   modo: "inicio", inicio: null, destino: null,  // puntos en metros [x, y]
   ruta: null,                                   // {x,y,z,pend,cum,total,stats,sx,sy,celdas}
   peticion: 0,
@@ -94,6 +95,14 @@ function pendienteMapa(xm, ym) {
   const c = Math.round(xm / celda - 0.5), r = Math.round((M().alto - ym) / celda - 0.5);
   if (c < 0 || r < 0 || c >= nc || r >= nf) return NaN;
   return E.pendCelda[r * nc + c];
+}
+// Unidad geologica en un punto del mapa, o null (sin capa o sin dato).
+function unidadGeo(xm, ym) {
+  if (!E.geo) return null;
+  const { nc, nf, celda } = M();
+  const c = Math.round(xm / celda - 0.5), r = Math.round((M().alto - ym) / celda - 0.5);
+  if (c < 0 || r < 0 || c >= nc || r >= nf) return null;
+  return E.geo.unidades[E.geo.celdas[r * nc + c] - 1] ?? null;
 }
 
 // ------------------------------------------------------------- terreno
@@ -177,9 +186,14 @@ function colorear() {
   // En la vista general la ruta se "pinta" sobre el propio terreno; durante el
   // recorrido se ve la cinta con flechas, que es mas nitida de cerca.
   const pintarRuta = E.ruta && !E.siguiendo;
+  const geo = E.verGeo && E.geo ? E.geo : null;
   for (let i = 0; i < a.length; i++) {
     if (isNaN(a[i])) { img[4 * i + 3] = 0; continue; }
     rampa((a[i] - zmin) / (zmax - zmin), rgb);
+    if (geo) {                                   // tinte de la unidad geologica
+      const u = geo.unidades[geo.celdas[i] - 1];
+      if (u) for (let j = 0; j < 3; j++) rgb[j] += (u.color[j] - rgb[j]) * 0.4;
+    }
     if (E.verProhibido) {
       const m = p[i] > E.tol ? [rojo, 0.62] : p[i] > E.tol * 0.8 ? [ambar, 0.28] : null;
       if (m) for (let j = 0; j < 3; j++) rgb[j] += (m[0][j] - rgb[j]) * m[1];
@@ -1066,6 +1080,32 @@ function actualizarCursor() {
   if (!p) { el.textContent = ""; return; }
   const pd = pendienteMapa(p[0], p[1]);
   el.innerHTML = `${fmtPunto(p)} · pendiente <b style="color:${pd > E.tol ? "var(--peligro)" : "inherit"}">${pd.toFixed(1)}°</b>`;
+  const u = E.verGeo ? unidadGeo(p[0], p[1]) : null;
+  if (u) el.innerHTML += ` · geología <b>${u.codigo}</b>`;
+}
+
+// ------------------------------------------------------ capa geologica
+// Opcional: si el servidor no la tiene, el visor queda igual que siempre.
+async function cargarGeologia() {
+  try {
+    const meta = await (await fetch("/api/geologia")).json();
+    if (!meta.disponible) return;
+    const celdas = new Uint8Array(await (await fetch("/api/geologia_celdas")).arrayBuffer());
+    if (celdas.length !== M().nc * M().nf) return;
+    E.geo = { ...meta, celdas };
+  } catch (e) { return; }
+  const esc = (t) => String(t).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+  const rgb = (c) => `rgb(${c.map((v) => Math.round(v * 255)).join(",")})`;
+  $("leyendaGeo").innerHTML = E.geo.unidades.filter((u) => u.pct > 0).map((u) =>
+    `<div class="unidad"><i style="background:${rgb(u.color)}"></i><div><b>${esc(u.codigo)}</b> · ` +
+    `${u.pct.toLocaleString("es")} % del mapa<small>${esc(u.nombre)}, ${esc(u.edad)}</small></div></div>`).join("") +
+    `<p class="nota">${esc(E.geo.fuente)}. ${esc(E.geo.nota)}</p>`;
+  $("grupoGeo").hidden = false;
+  $("verGeo").onchange = (ev) => {
+    E.verGeo = ev.target.checked;
+    $("leyendaGeo").hidden = !E.verGeo;
+    colorear();
+  };
 }
 
 // Que Espacio/Enter no vuelvan a "pulsar" el ultimo boton usado
@@ -1200,13 +1240,14 @@ async function iniciar() {
   crearBocanadas();
   crearRemolinos();
   casco = crearCasco({ THREE, E, M, $, camara, enRuta, indiceEn, aMapa, sueloMundo, remolinos,
-    crearAstronauta, animarCaminata, VELOCIDADES });
+    crearAstronauta, animarCaminata, VELOCIDADES, unidadGeo });
   E.polvo = $("polvo").value / 100; E.solElev = +$("sol").value; E.remolinos = $("remolinos").checked;
   aplicarAtmosfera();
 
   calcularPendientes();
   crearMinimapa();
   construirTerreno();
+  await cargarGeologia();
   redimensionar();
   actualizarEscalaPuntos();
   vistaGeneral();
@@ -1220,6 +1261,7 @@ async function iniciar() {
 
 // Permite abrir el visor con una ruta lista, p. ej.
 //   /?inicio=368,10646&destino=6355,1267&pendiente=15&polvo=40&sol=20&recorrer=1
+// (&geologia=1 enciende la capa geologica)
 async function desdeURL() {
   const q = new URLSearchParams(location.search);
   const par = (k) => q.get(k)?.split(",").map(Number);
@@ -1228,6 +1270,7 @@ async function desdeURL() {
   if (q.has("sol")) { $("sol").value = q.get("sol"); E.solElev = +q.get("sol"); }
   if (q.has("camara")) E.cam = +q.get("camara") % CAMARAS.length;
   if (q.has("s")) E.s = +q.get("s");
+  if (q.get("geologia") === "1" && E.geo) { $("verGeo").checked = true; $("verGeo").onchange({ target: $("verGeo") }); }
   aplicarAtmosfera();
   if (!par("inicio") || !par("destino")) return;
   E.inicio = par("inicio"); E.destino = par("destino"); ponerModo("destino");

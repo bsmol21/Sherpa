@@ -159,6 +159,27 @@ export function crearCasco(ctx) {
     }
   }
 
+  // Geologia (solo si el visor tiene la capa geologica; si no, no hace nada).
+  // Sherpa dice sobre que unidad caminas y avisa al cruzar a otra. Espera a
+  // que la cola este casi vacia para no tapar los avisos de ruta y de riesgo.
+  const PAUSA_GEO = 20;           // s minimos entre dos comentarios de geologia
+  const geo = { dicho: null, t: -Infinity };
+  function unidadAqui() {
+    if (!ctx.unidadGeo) return null;
+    const p = enRuta(E.s);
+    return ctx.unidadGeo(...aMapa(p.x, p.z));
+  }
+  function vigilarGeologia() {
+    const u = unidadAqui();
+    if (!u || u.id === geo.dicho || sh.cola.length > 1 || E.t - geo.t < PAUSA_GEO) return;
+    const edad = u.edad ? `, de ${u.edad}` : "";
+    decir(geo.dicho === null
+      ? `Geología: caminas sobre la ${u.nombre}${edad}.`
+      : `Según el mapa geológico, aquí cambia el terreno: entras en la ${u.nombre}${edad}. ` +
+        `${u.interes} Buen punto para tomar una muestra.`.trim());
+    geo.dicho = u.id; geo.t = E.t;
+  }
+
   // Sucesos que comenta Sherpa (se revisan 10 veces por segundo)
   let polvoAvisado = false;
   function vigilar(giro, cuesta, t) {
@@ -198,6 +219,7 @@ export function crearCasco(ctx) {
           `rem${ctx.remolinos.indexOf(rem)}-${u.id}`);
       }
     }
+    vigilarGeologia();
   }
 
   // ------------------------------------------------------- HUD
@@ -301,6 +323,7 @@ export function crearCasco(ctx) {
   function escribirDatos(giro, cuesta, t) {
     const r = E.ruta, falta = Math.max(0, r.total - E.s), i = indiceEn(E.s);
     const pend = r.pend[Math.min(i, r.pend.length - 1)] ?? 0;
+    const ug = unidadAqui();
     $("hcRuta").innerHTML = `<h3>RUTA</h3>
       <div class="fila-hc"><span>Recorrido</span><b>${fmtDist(E.s)}</b></div>
       ${barra(E.s / r.total * 100)}
@@ -308,7 +331,8 @@ export function crearCasco(ctx) {
       <div class="fila-hc"><span>A pie</span><b>${fmtTiempo(falta)}</b></div>
       <div class="fila-hc"><span>Altitud</span><b>${Math.round(r.z[i])} m</b></div>
       <div class="fila-hc"><span>Pendiente</span><b class="${pend > E.tol * 0.8 ? "aviso" : ""}">${pend.toFixed(1)}° / ${E.tol}°</b></div>
-      ${barra(pend / E.tol * 100, pend > E.tol * 0.8)}`;
+      ${barra(pend / E.tol * 100, pend > E.tol * 0.8)}
+      ${ug ? `<div class="fila-hc"><span>Geología</span><b>${ug.codigo}</b></div>` : ""}`;
     $("hcTraje").innerHTML = `<h3>TRAJE</h3>
       <div class="fila-hc"><span>O₂</span><b class="${t.o2 < 30 ? "aviso" : ""}">${Math.round(t.o2)} %</b></div>
       ${barra(t.o2, t.o2 < 30)}

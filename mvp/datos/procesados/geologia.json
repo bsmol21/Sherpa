@@ -1,0 +1,181 @@
+{
+ "fuente": "USGS SIM 3292, Geologic Map of Mars (Tanaka et al., 2014), escala 1:20.000.000",
+ "nota": "Mapa global: los contactos pueden estar corridos varios kilometros. Edades aproximadas (modelo de conteo de crateres).",
+ "origen": "esquina superior izquierda del mapa de elevacion; x = este (m), y = sur (m)",
+ "ancho": 7000.9,
+ "alto": 11649.3,
+ "unidades": [
+  {
+   "codigo": "HNt",
+   "descripcion": "Hesperian and Noachian transition unit",
+   "poligonos": [
+    [
+     [
+      [
+       7100.9,
+       -100.0
+      ],
+      [
+       7100.9,
+       11749.3
+      ],
+      [
+       3181.1,
+       11749.3
+      ],
+      [
+       3034.6,
+       11514.7
+      ],
+      [
+       2040.2,
+       9961.6
+      ],
+      [
+       1752.1,
+       9523.4
+      ],
+      [
+       1605.3,
+       9308.1
+      ],
+      [
+       1455.2,
+       9097.3
+      ],
+      [
+       1300.4,
+       8893.0
+      ],
+      [
+       1138.8,
+       8697.9
+      ],
+      [
+       967.5,
+       8515.9
+      ],
+      [
+       782.8,
+       8352.0
+      ],
+      [
+       590.0,
+       8215.3
+      ],
+      [
+       384.7,
+       8095.4
+      ],
+      [
+       170.3,
+       7987.7
+      ],
+      [
+       -50.8,
+       7888.9
+      ],
+      [
+       -100.0,
+       7869.4
+      ],
+      [
+       -100.0,
+       -100.0
+      ]
+     ]
+    ]
+   ],
+   "nombre": "unidad de transición del Hespérico-Noeico",
+   "edad": "entre 3.400 y 4.100 millones de años",
+   "interes": "Es terreno de transición entre las tierras altas y las bajas, modelado por erosión y sedimentos.",
+   "color": [
+    0.2,
+    0.78,
+    0.62
+   ]
+  },
+  {
+   "codigo": "mNhm",
+   "descripcion": "Middle Noachian highland massif unit",
+   "poligonos": [
+    [
+     [
+      [
+       -100.0,
+       11749.3
+      ],
+      [
+       -100.0,
+       7869.4
+      ],
+      [
+       -50.8,
+       7888.9
+      ],
+      [
+       170.3,
+       7987.7
+      ],
+      [
+       384.7,
+       8095.4
+      ],
+      [
+       590.0,
+       8215.3
+      ],
+      [
+       782.8,
+       8352.0
+      ],
+      [
+       967.5,
+       8515.9
+      ],
+      [
+       1138.8,
+       8697.9
+      ],
+      [
+       1300.4,
+       8893.0
+      ],
+      [
+       1455.2,
+       9097.3
+      ],
+      [
+       1605.3,
+       9308.1
+      ],
+      [
+       1752.1,
+       9523.4
+      ],
+      [
+       2040.2,
+       9961.6
+      ],
+      [
+       3034.6,
+       11514.7
+      ],
+      [
+       3181.1,
+       11749.3
+      ]
+     ]
+    ]
+   ],
+   "nombre": "unidad de macizos de tierras altas del Noeico Medio",
+   "edad": "entre 3.800 y 3.900 millones de años",
+   "interes": "Son macizos levantados por un impacto gigante: de la corteza más antigua de Marte.",
+   "color": [
+    0.66,
+    0.48,
+    0.95
+   ]
+  }
+ ]
+}
