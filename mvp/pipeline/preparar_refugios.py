@@ -84,7 +84,7 @@ HONDONADA_MAX = 25.0       # m por debajo del entorno = hondonada fuerte
 # Puntuacion de suelo segun inercia termica (J m-2 K-1 s-1/2)
 SUELO_PUNTOS = [(150, 0.0), (250, 0.45), (350, 0.9), (math.inf, 1.0)]
 
-PESOS = dict(proteccion=0.40, suelo=0.25, sin_hondonada=0.15, plano=0.20)
+PESOS = dict(proteccion=0.45, suelo=0.25, sin_hondonada=0.20, plano=0.10)
 PUNTUACION_MINIMA = 0.45   # candidatos por debajo de esto no se consideran
 SEPARACION_MIN = 500.0     # m entre refugios (en linea recta)
 # ======================================================================
