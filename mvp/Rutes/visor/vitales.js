@@ -17,6 +17,8 @@
 // Los numeros son un modelo simple y explicable para la demo, no un modelo
 // medico: ver los comentarios de cada bloque.
 
+import { t, minutos, num } from "./i18n.js";
+
 const VEL = 1.2;                 // m/s caminando con traje (igual que casco.js)
 const G_MARTE = 3.71;            // m/s2
 const MASA = 150;                // kg: astronauta + traje + equipo
@@ -67,8 +69,8 @@ export function crearVitales(ctx) {
   let pidiendo = false, ultimaPeticion = { t: -1e9, x: 1e9, y: 1e9 }, reintento = 0;
   const avisos = new Map();      // clave -> t (s sim) del ultimo aviso
 
-  const fmtMin = (m) => !isFinite(m) || m > 600 ? "> 10 h"
-    : m >= 60 ? `${Math.floor(m / 60)} h ${Math.round(m % 60)} min` : `${Math.max(0, Math.round(m))} min`;
+  const fmtMin = minutos;
+  const C = () => t("causa");                       // textos de las causas, en el idioma actual
   const avisar = (clave, texto, urgente = false, cadaMin = 4) => {
     const t0 = avisos.get(clave);
     if (t0 !== undefined && V.t - t0 < cadaMin * 60) return;
@@ -158,14 +160,14 @@ export function crearVitales(ctx) {
     const t = V.tasas, lista = [];
     if (t.fatiga > 1e-4 && V.fatiga > 5) lista.push(["fatiga", (LIM.fatiga[2] - V.fatiga) / t.fatiga / 60]);
     // (solo tendencias que ya se notan: evita falsas alarmas al empezar a caminar)
-    if (t.tc > 1e-6 && V.tc > 37.3) lista.push(["temperatura alta", (LIM.tAlta[2] - V.tc) / t.tc / 60]);
-    if (t.tc < -1e-6 && V.tc < 36.8) lista.push(["temperatura baja", (V.tc - LIM.tBaja[2]) / -t.tc / 60]);
-    if (t.spo2 < -1e-5 && (V.spo2 < 95 || V.hipoxia)) lista.push(["oxígeno en sangre", (V.spo2 - LIM.spo2[2]) / -t.spo2 / 60]);
+    if (t.tc > 1e-6 && V.tc > 37.3) lista.push(["tAlta", (LIM.tAlta[2] - V.tc) / t.tc / 60]);
+    if (t.tc < -1e-6 && V.tc < 36.8) lista.push(["tBaja", (V.tc - LIM.tBaja[2]) / -t.tc / 60]);
+    if (t.spo2 < -1e-5 && (V.spo2 < 95 || V.hipoxia)) lista.push(["spo2", (V.spo2 - LIM.spo2[2]) / -t.spo2 / 60]);
     // dosis: cuenta tambien un evento solar anunciado que aun no llega
     const S = V.solar;
     if (S && V.t < S.t0 + SEP_DURACION_MIN * 60) {
       const espera = Math.max(0, S.t0 - V.t) / 60;
-      lista.push(["radiación", espera + (LIM_DOSIS - V.dosis) / (V.enRefugio ? SEP_TASA * 0.1 : SEP_TASA) * 60]);
+      lista.push(["radiacion", espera + (LIM_DOSIS - V.dosis) / (V.enRefugio ? SEP_TASA * 0.1 : SEP_TASA) * 60]);
     }
     let m = Infinity, cual = null;
     for (const [k, v] of lista) if (v < m) { m = Math.max(0, v); cual = k; }
@@ -185,7 +187,7 @@ export function crearVitales(ctx) {
         body: JSON.stringify({ desde: [x, y], pendiente_maxima: E.tol }) });
       const res = await r.json();
       if (res.ok && !res.listo) {
-        V.preparando = `Preparando rutas de emergencia (${res.progreso}/${res.total})…`;
+        V.preparando = { progreso: res.progreso, total: res.total };
         reintento = performance.now() + 2000;
       } else if (res.ok) {
         V.preparando = null;
@@ -233,30 +235,31 @@ export function crearVitales(ctx) {
     const c = [];                  // [nivel, causa]
     const add = (n, txt) => c.push([n, txt]);
     const margen = V.mejor ? V.seguro - V.mejor.eta : -Infinity;
-    if (V.fatiga >= LIM.fatiga[1]) add(3, `fatiga al ${Math.round(V.fatiga)} %`);
-    else if (V.fatiga >= LIM.fatiga[0]) add(2, `fatiga al ${Math.round(V.fatiga)} %`);
-    else if (V.fatiga >= 45) add(1, `fatiga al ${Math.round(V.fatiga)} %`);
-    if (V.tc >= LIM.tAlta[1]) add(3, `temperatura corporal de ${V.tc.toFixed(1)} °C`);
-    else if (V.tc >= LIM.tAlta[0]) add(2, `temperatura corporal de ${V.tc.toFixed(1)} °C`);
-    if (V.tc <= LIM.tBaja[1]) add(3, `temperatura corporal de ${V.tc.toFixed(1)} °C`);
-    else if (V.tc <= LIM.tBaja[0]) add(2, `temperatura corporal de ${V.tc.toFixed(1)} °C`);
-    if (V.spo2 <= LIM.spo2[1]) add(3, `oxígeno en sangre al ${Math.round(V.spo2)} %`);
-    else if (V.spo2 <= LIM.spo2[0]) add(2, `oxígeno en sangre al ${Math.round(V.spo2)} %`);
-    if (V.fc >= FC_MAX * 0.9) add(2, `pulso de ${Math.round(V.fc)}`);
-    else if (V.fc >= FC_MAX * 0.8) add(1, `pulso de ${Math.round(V.fc)}`);
-    if (V.dosis >= LIM_DOSIS * 0.8) add(3, `dosis de ${V.dosis.toFixed(1)} mSv`);
-    else if (V.dosis >= LIM_DOSIS * 0.5) add(2, `dosis de ${V.dosis.toFixed(1)} mSv`);
-    if (V.solar && V.t < V.solar.t0 + SEP_DURACION_MIN * 60 && !V.enRefugio) add(2, "evento de partículas solares");
+    const k = C(), fat = Math.round(V.fatiga), tc = num(V.tc, 1), sp = Math.round(V.spo2);
+    if (V.fatiga >= LIM.fatiga[1]) add(3, k.fatiga(fat));
+    else if (V.fatiga >= LIM.fatiga[0]) add(2, k.fatiga(fat));
+    else if (V.fatiga >= 45) add(1, k.fatiga(fat));
+    if (V.tc >= LIM.tAlta[1]) add(3, k.temp(tc));
+    else if (V.tc >= LIM.tAlta[0]) add(2, k.temp(tc));
+    if (V.tc <= LIM.tBaja[1]) add(3, k.temp(tc));
+    else if (V.tc <= LIM.tBaja[0]) add(2, k.temp(tc));
+    if (V.spo2 <= LIM.spo2[1]) add(3, k.spo2(sp));
+    else if (V.spo2 <= LIM.spo2[0]) add(2, k.spo2(sp));
+    if (V.fc >= FC_MAX * 0.9) add(2, k.fc(Math.round(V.fc)));
+    else if (V.fc >= FC_MAX * 0.8) add(1, k.fc(Math.round(V.fc)));
+    if (V.dosis >= LIM_DOSIS * 0.8) add(3, k.dosis(num(V.dosis, 1)));
+    else if (V.dosis >= LIM_DOSIS * 0.5) add(2, k.dosis(num(V.dosis, 1)));
+    if (V.solar && V.t < V.solar.t0 + SEP_DURACION_MIN * 60 && !V.enRefugio) add(2, k.solar);
     if (V.tormenta && !V.enRefugio) {
-      if (V.tTormenta <= 0) add(3, "estás dentro de la tormenta");
-      else if (V.tTormenta < 30) add(2, `la tormenta te alcanza en ${fmtMin(V.tTormenta)}`);
-      else add(1, `tormenta a ${fmtMin(V.tTormenta)}`);
+      if (V.tTormenta <= 0) add(3, k.dentro);
+      else if (V.tTormenta < 30) add(2, k.alcanza(fmtMin(V.tTormenta)));
+      else add(1, k.tormenta(fmtMin(V.tTormenta)));
     }
     if (V.opciones && isFinite(V.seguro)) {
-      if (!V.mejor) add(3, "ningún refugio alcanzable con margen");
-      else if (margen < 10) add(3, `margen de solo ${fmtMin(margen)}`);
-      else if (margen < 25) add(2, `margen de ${fmtMin(margen)}`);
-      else if (margen < 45) add(1, `margen de ${fmtMin(margen)}`);
+      if (!V.mejor) add(3, k.sinRefugio);
+      else if (margen < 10) add(3, k.margenSolo(fmtMin(margen)));
+      else if (margen < 25) add(2, k.margen(fmtMin(margen)));
+      else if (margen < 45) add(1, k.margen(fmtMin(margen)));
     }
     c.sort((a, b) => b[0] - a[0]);
     const n = c.length ? c[0][0] : 0;
@@ -265,17 +268,13 @@ export function crearVitales(ctx) {
   }
 
   // ------------------------------------------------------ acciones
-  function nombreCorto(ref) { return ref.nombre.replace("Refugio ", "refugio "); }
-
   function irA(op, auto) {
     V.emergencia = op.ref;
     V.propuesta = null;
     V.enRefugio = null;
     ctx.irARefugio(op.ruta, op.ref);
     sPrev = E.s; rutaPrev = E.ruta;
-    const extra = V.mejor ? "" : " No llegas con margen a ningún refugio: baja el ritmo y aviso a la base.";
-    decir(`${auto ? "Emergencia" : "De acuerdo"}: ${auto ? V.causa + ". " : ""}Te llevo al ${nombreCorto(op.ref)}, ` +
-      `a ${fmtMin(op.eta)} a pie. Sigue al holograma.${extra}`, null, true);
+    decir(t("viIrA", auto, V.causa, op.ref, fmtMin(op.eta), !V.mejor), null, true);
   }
 
   function actuar() {
@@ -285,19 +284,18 @@ export function crearVitales(ctx) {
     if (V.nivel === "alerta" && op) {
       if (!V.propuesta || V.propuesta.ref.id !== op.ref.id) {
         V.propuesta = op;
-        avisar(`prop${op.ref.id}`, `Alerta: ${V.causa}. Te propongo ir al ${nombreCorto(op.ref)}, a ` +
-          `${fmtMin(op.eta)}. Pulsa A para aceptar.`, true, 3);
+        avisar(`prop${op.ref.id}`, t("viPropuesta", V.causa, op.ref, fmtMin(op.eta)), true, 3);
       } else V.propuesta = op;                        // datos frescos
       return;
     }
     V.propuesta = null;
     if (V.nivel === "precaucion") {
-      if (V.fc >= FC_MAX * 0.8) avisar("fc", `Pulso alto: ${Math.round(V.fc)}. Baja el ritmo.`);
-      if (V.fatiga >= 45) avisar("fat", `Fatiga al ${Math.round(V.fatiga)} %. Haz pausas cortas y bebe agua.`);
-      if (V.tormenta && op) avisar("torm", `Tormenta de polvo a ${fmtMin(V.tTormenta)}. ` +
-        `El refugio más cercano que sirve es el ${nombreCorto(op.ref)}, a ${fmtMin(op.eta)}.`, false, 6);
-      if (V.mejor && V.seguro - V.mejor.eta < 45) avisar("marg", `Tu tiempo seguro es de ${fmtMin(V.seguro)}; ` +
-        `el ${nombreCorto(V.mejor.ref)} está a ${fmtMin(V.mejor.eta)}. Conviene ir acercándote.`, false, 6);
+      if (V.fc >= FC_MAX * 0.8) avisar("fc", t("viPulso", Math.round(V.fc)));
+      if (V.fatiga >= 45) avisar("fat", t("viFatiga", Math.round(V.fatiga)));
+      if (V.tormenta && op) avisar("torm", t("viTormentaRef", fmtMin(V.tTormenta), op.ref, fmtMin(op.eta)), false, 6);
+      if (V.mejor && V.seguro - V.mejor.eta < 45) {
+        avisar("marg", t("viMargen", fmtMin(V.seguro), V.mejor.ref, fmtMin(V.mejor.eta)), false, 6);
+      }
     }
   }
 
@@ -306,9 +304,9 @@ export function crearVitales(ctx) {
     if (E.ruta.total - E.s <= 3) {
       V.enRefugio = V.emergencia;
       V.emergencia = null;
-      const motivo = V.tormenta ? "hasta que pase la tormenta" : V.solar ? "hasta que termine el evento solar"
-        : "y descansa hasta recuperarte";
-      decir(`Llegaste al ${nombreCorto(V.enRefugio)}. Estás a salvo: quédate aquí ${motivo}.`, null, true);
+      const M = t("viMotivo");
+      const motivo = V.tormenta ? M.tormenta : V.solar ? M.solar : M.descanso;
+      decir(t("viLlegada", V.enRefugio, motivo), null, true);
     }
   }
 
@@ -321,17 +319,16 @@ export function crearVitales(ctx) {
       const d = [Math.SQRT1_2, -Math.SQRT1_2];
       V.tormenta = { d, t0: V.t, frente0: dot([x, y], d) - TORMENTA_VEL * TORMENTA_LLEGA_MIN * 60 };
       V.polvoAntes = E.polvo;
-      decir(`Aviso meteorológico: tormenta de polvo desde el noroeste. Te alcanza en unos ${TORMENTA_LLEGA_MIN} minutos.`, null, true);
+      decir(t("viAvisoTormenta", TORMENTA_LLEGA_MIN), null, true);
     } else if (tipo === "solar") {
       V.solar = { t0: V.t + SEP_AVISO_MIN * 60 };
-      decir(`Alerta de clima espacial: llamarada solar. Las partículas llegan en ${SEP_AVISO_MIN} minutos. ` +
-        "Busca refugio.", null, true);
+      decir(t("viAvisoSolar", SEP_AVISO_MIN), null, true);
     } else if (tipo === "fatiga") {
       V.fatigaExtra = !V.fatigaExtra;
-      if (V.fatigaExtra) decir("Detecto signos de agotamiento: pulso alto y fatiga en aumento.", null, true);
+      if (V.fatigaExtra) decir(t("viAgotamiento"), null, true);
     } else if (tipo === "hipoxia") {
       V.hipoxia = !V.hipoxia;
-      if (V.hipoxia) decir("Atención: tu oxígeno en sangre está bajando.", null, true);
+      if (V.hipoxia) decir(t("viHipoxia"), null, true);
     } else if (tipo === "reiniciar") {
       Object.assign(V, { fc: FC_REPOSO, met: MET_REPOSO, tc: 37, spo2: 97.5, fatiga: 0, dosis: 0,
         tormenta: null, solar: null, fatigaExtra: false, hipoxia: false, propuesta: null,

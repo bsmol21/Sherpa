@@ -7,10 +7,13 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { crearCasco } from "./casco.js";
 import { crearVitales } from "./vitales.js";
+import { crearBases } from "./base.js";
+import { t, ponerIdioma, idiomaGuardado, alCambiarIdioma, idioma, num, letraRef, nombreRef,
+  geoTxt, sueloTxt, polvoTxt, notaTxt } from "./i18n.js";
 
 const $ = (id) => document.getElementById(id);
 const VELOCIDADES = [1.5, 3, 5, 10, 25, 50, 100, 250, 500];   // m/s
-const CAMARAS = ["Primera persona", "Persecución", "Aérea"];
+const N_CAMARAS = 3;                                          // primera persona, persecucion, aerea
 const ALTURA_OJOS = 1.7;                                      // m, dentro del casco
 
 // ------------------------------------------------------------------ estado
@@ -23,6 +26,7 @@ const E = {
   vit: null,                                    // signos vitales y emergencia (vitales.js)
   modo: "inicio", inicio: null, destino: null,  // puntos en metros [x, y]
   ruta: null,                                   // {x,y,z,pend,cum,total,stats,sx,sy,celdas}
+  rutaBase: null,                               // ruta original mientras se va a un refugio {ruta, inicio, destino}
   peticion: 0,
   // recorrido
   siguiendo: false, reproduciendo: true, s: 0, vel: 3, cam: 1,
@@ -119,7 +123,7 @@ function sueloEn(xm, ym) {
 }
 
 // ------------------------------------------------------------- terreno
-let malla, colores, mini, pesoRuta;
+let malla, colores, mini, pesoRuta, pesoBase;
 const RAMPA = [[0, [0.22, 0.12, 0.08]], [0.35, [0.47, 0.26, 0.15]],
                [0.7, [0.71, 0.47, 0.29]], [1, [0.89, 0.75, 0.6]]];
 function rampa(t, out) {
@@ -155,6 +159,7 @@ function construirTerreno() {
   const pos = new Float32Array(n * 3);
   colores = new Float32Array(n * 3);
   pesoRuta = new Float32Array(n);
+  pesoBase = new Float32Array(n);
   for (let r = 0; r < nf; r++) {
     for (let c = 0; c < nc; c++) {
       const i = r * nc + c;
@@ -195,6 +200,8 @@ function aplicarExageracion() {
 function colorear() {
   const a = E.alt, p = E.pendCelda, { zmin, zmax } = M(), rgb = [0, 0, 0];
   const rojo = [0.95, 0.16, 0.06], ambar = [0.95, 0.68, 0.2], cian = [0.25, 0.85, 0.95];
+  const amarillo = [1.0, 0.84, 0.2];
+  const colRuta = E.rutaBase ? amarillo : cian;    // ruta de emergencia en amarillo
   const img = mini.base.data;
   // En la vista general la ruta se "pinta" sobre el propio terreno; durante el
   // recorrido se ve la cinta con flechas, que es mas nitida de cerca.
@@ -218,8 +225,11 @@ function colorear() {
     }
     img[4 * i] = rgb[0] * 255; img[4 * i + 1] = rgb[1] * 255; img[4 * i + 2] = rgb[2] * 255;
     img[4 * i + 3] = 255;
+    if (pintarRuta && pesoBase[i] > 0) {         // ruta original (se conserva al ir a un refugio)
+      for (let j = 0; j < 3; j++) rgb[j] += (cian[j] - rgb[j]) * pesoBase[i];
+    }
     if (pintarRuta && pesoRuta[i] > 0) {
-      for (let j = 0; j < 3; j++) rgb[j] += (cian[j] - rgb[j]) * pesoRuta[i];
+      for (let j = 0; j < 3; j++) rgb[j] += (colRuta[j] - rgb[j]) * pesoRuta[i];
     }
     colores.set(rgb, 3 * i);
   }
@@ -228,10 +238,14 @@ function colorear() {
 }
 
 function marcarCeldasRuta() {
-  pesoRuta.fill(0);
-  if (!E.ruta) return;
+  marcarCeldas(pesoRuta, E.ruta);
+  marcarCeldas(pesoBase, E.rutaBase?.ruta);
+}
+function marcarCeldas(peso, ruta) {
+  peso.fill(0);
+  if (!ruta) return;
   const { nc, nf } = M();
-  for (const i of E.ruta.celdas) {
+  for (const i of ruta.celdas) {
     const r0 = Math.floor(i / nc), c0 = i % nc;
     for (let dr = -1; dr <= 1; dr++) {
       for (let dc = -1; dc <= 1; dc++) {
@@ -239,7 +253,7 @@ function marcarCeldasRuta() {
         if (r < 0 || c < 0 || r >= nf || c >= nc) continue;
         const w = dr === 0 && dc === 0 ? 0.8 : 0.4;
         const j = r * nc + c;
-        if (w > pesoRuta[j]) pesoRuta[j] = w;
+        if (w > peso[j]) peso[j] = w;
       }
     }
   }
@@ -259,7 +273,7 @@ function crearPin(color) {
   escena.add(g);
   return g;
 }
-let pinInicio, pinDestino, cinta, texCinta, pinesRefugio = [];
+let pinInicio, pinDestino, cinta, cintaBase, texCinta, texCintaEmerg, pinesRefugio = [];
 
 // Refugio: pin verde con su letra encima
 const COLOR_REFUGIO = 0x7cffb2;
@@ -279,11 +293,14 @@ function crearPinRefugio(letra) {
   g.add(et);
   return g;
 }
-const letraRefugio = (r) => r.nombre.replace(/^Refugio\s*/i, "").slice(0, 2) || String(r.id);
+const letraRefugio = (r) => letraRef(r).slice(0, 2);
 
 function colocarMarcadores() {
   const haciaRefugio = E.vit && (E.vit.emergencia || E.vit.enRefugio);
-  for (const [pin, p] of [[pinInicio, E.inicio], [pinDestino, haciaRefugio ? null : E.destino]]) {
+  // Yendo a un refugio se siguen marcando el inicio y el destino de la ruta original
+  const base = E.rutaBase;
+  const ini = base ? base.inicio : E.inicio, dest = base ? base.destino : haciaRefugio ? null : E.destino;
+  for (const [pin, p] of [[pinInicio, ini], [pinDestino, dest]]) {
     if (!p) { pin.visible = false; continue; }
     aMundo(p[0], p[1], alturaMapa(p[0], p[1]) || M().zmin, pin.position);
     // Durante el recorrido los pines se hacen pequenos para no tapar la vista
@@ -296,17 +313,21 @@ function colocarMarcadores() {
     aMundo(r.x, r.y, alturaMapa(r.x, r.y) || r.z, pin.position);
     const elegido = E.vit && (E.vit.emergencia?.id === r.id || E.vit.enRefugio?.id === r.id);
     pin.scale.setScalar((E.siguiendo ? 10 : S() * 0.9) * (elegido ? 1.3 : 1));
+    // De cerca se ve el modelo de la base: del pin solo queda la letra flotando encima
+    pin.children[0].visible = pin.children[1].visible = !E.siguiendo;
     pin.visible = true;
   });
+  bases?.construir(E.refugios);              // solo rehace los modelos si cambio la exageracion
 }
 
 // Textura de la cinta: banda translucida con bordes y flechas (sentido de avance)
-function crearTexturaCinta() {
+// (cian para la ruta normal, amarilla para la de emergencia)
+function crearTexturaCinta(relleno = "rgba(79,216,232,0.18)", borde = "rgba(170,248,255,0.95)") {
   const cv = document.createElement("canvas");
   cv.width = 64; cv.height = 64;
   const g = cv.getContext("2d");
-  g.fillStyle = "rgba(79,216,232,0.18)"; g.fillRect(4, 0, 56, 64);
-  g.fillStyle = "rgba(170,248,255,0.95)"; g.fillRect(4, 0, 4, 64); g.fillRect(56, 0, 4, 64);
+  g.fillStyle = relleno; g.fillRect(4, 0, 56, 64);
+  g.fillStyle = borde; g.fillRect(4, 0, 4, 64); g.fillRect(56, 0, 4, 64);
   g.strokeStyle = "rgba(255,255,255,0.9)"; g.lineWidth = 7; g.lineCap = "round"; g.lineJoin = "round";
   g.beginPath(); g.moveTo(16, 46); g.lineTo(32, 26); g.lineTo(48, 46); g.stroke();
   const t = new THREE.CanvasTexture(cv);
@@ -321,18 +342,27 @@ const PERIODO_FLECHAS = 3;        // m entre flechas
 // La cinta se apoya en el terreno: cada vertice toma la altura exacta del
 // triangulo del mapa que tiene debajo, con una elevacion minima para que no
 // parpadee contra el suelo.
+// Yendo a un refugio se dibujan dos cintas: la ruta original tal cual (cian)
+// y la de emergencia (amarilla, un poco mas alta para que se vea encima).
 function dibujarRuta3D() {
-  if (cinta) { escena.remove(cinta); cinta.geometry.dispose(); cinta = null; }
-  if (!E.ruta || E.ruta.total <= 0) return;
-  const total = E.ruta.total, paso = Math.max(0.75, total / 25000);
+  for (const m of [cinta, cintaBase]) {
+    if (m) { escena.remove(m); m.geometry.dispose(); m.material.dispose(); }
+  }
+  cinta = cintaBase = null;
+  if (E.rutaBase) cintaBase = crearCinta(E.rutaBase.ruta, texCinta, 0, 1);
+  if (E.ruta) cinta = E.rutaBase ? crearCinta(E.ruta, texCintaEmerg, 0.05, 2) : crearCinta(E.ruta, texCinta, 0, 1);
+}
+function crearCinta(ruta, tex, liftExtra, orden) {
+  if (!ruta || ruta.total <= 0) return null;
+  const total = ruta.total, paso = Math.max(0.75, total / 25000);
   const n = Math.floor(total / paso) + 1;
   const pos = new Float32Array(n * 3 * 3), uv = new Float32Array(n * 3 * 2);
   const idx = [], p = new THREE.Vector3(), a = new THREE.Vector3(), b = new THREE.Vector3();
-  const lift = 0.08 + 0.06 * E.exag;
+  const lift = 0.08 + 0.06 * E.exag + liftExtra;
   for (let k = 0; k < n; k++) {
     const s = Math.min(total, k * paso);
-    enRuta(s, p);
-    enRuta(s - 2, a); enRuta(s + 2, b);
+    enRuta(s, p, ruta);
+    enRuta(s - 2, a, ruta); enRuta(s + 2, b, ruta);
     let tx = b.x - a.x, tz = b.z - a.z;
     const L = Math.hypot(tx, tz) || 1; tx /= L; tz /= L;
     for (let j = 0; j < 3; j++) {               // izquierda, centro, derecha
@@ -355,10 +385,11 @@ function dibujarRuta3D() {
   geo.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
   geo.setIndex(idx);
   geo.computeBoundingSphere();
-  cinta = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: texCinta, transparent: true,
+  const malla = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: tex, transparent: true,
     depthWrite: false, side: THREE.DoubleSide }));
-  cinta.renderOrder = 1;
-  escena.add(cinta);
+  malla.renderOrder = orden;
+  escena.add(malla);
+  return malla;
 }
 
 // ---------------------------------------------------------- astronauta
@@ -409,7 +440,7 @@ function crearAstronauta(matUnico = null) {
   escena.add(raiz);
   return { raiz, cuerpo, pierI, pierD, brazI, brazD, fase: 0, amp: 0, rumbo: 0, pasoPrevio: 0 };
 }
-let astro, casco, vitales;
+let astro, casco, vitales, bases = null;
 
 // Ciclo de pasos: piernas, rodillas, brazos y el brinco de baja gravedad.
 function animarCaminata(A, dt, andando) {
@@ -693,9 +724,8 @@ function aplicarAtmosfera() {
   hemi.color.copy(COL.cieloHemi).lerp(COL.tormenta, q * 0.6);
   sol.castShadow = q < 0.85 && visible > 0.2;
 
-  const etiquetas = [[0.05, "Despejado"], [0.3, "Algo de polvo"], [0.55, "Calima"],
-    [0.8, "Tormenta"], [1.01, "Gran tormenta"]];
-  $("polvoVal").textContent = etiquetas.find(([lim]) => q < lim)[1];
+  const limites = [0.05, 0.3, 0.55, 0.8, 1.01];
+  $("polvoVal").textContent = t("polvoNiv")[limites.findIndex((lim) => q < lim)];
   $("solVal").textContent = `${E.solElev}°`;
 }
 
@@ -712,6 +742,7 @@ function actualizarAtmosfera(dt) {
   actualizarRemolinos(dt);
   actualizarBocanadas(dt);
   if (texCinta) texCinta.offset.y -= dt * 0.8;      // las flechas avanzan
+  if (texCintaEmerg) texCintaEmerg.offset.y -= dt * 1.2;
 }
 
 function actualizarEscalaPuntos() {
@@ -746,11 +777,13 @@ function dibujarMinimapa() {
   ctx.imageSmoothingEnabled = true;
   ctx.drawImage(mini.baseCv, 0, 0, W, H);
   const k = devicePixelRatio;
-  if (E.ruta) {
-    ctx.strokeStyle = "#4fd8e8"; ctx.lineWidth = 2 * k; ctx.beginPath();
-    E.ruta.x.forEach((x, i) => (i ? ctx.lineTo : ctx.moveTo).call(ctx, px(x), py(E.ruta.y[i])));
+  const linea = (r, color) => {
+    ctx.strokeStyle = color; ctx.lineWidth = 2 * k; ctx.beginPath();
+    r.x.forEach((x, i) => (i ? ctx.lineTo : ctx.moveTo).call(ctx, px(x), py(r.y[i])));
     ctx.stroke();
-  }
+  };
+  if (E.rutaBase) linea(E.rutaBase.ruta, "#4fd8e8");          // ruta original
+  if (E.ruta) linea(E.ruta, E.rutaBase ? "#ffd23f" : "#4fd8e8");
   // Tormenta: zona ya cubierta por el frente (semiplano)
   const V = E.vit;
   if (V && V.tormenta) {
@@ -862,7 +895,7 @@ function ponerModo(m) {
 
 function colocarPunto(p) {
   if (Number.isNaN(alturaMapa(p[0], p[1]))) {
-    return mostrarEstado("Ese punto está fuera del mapa o sin datos.", true);
+    return mostrarEstado(() => t("fueraMapa"), true);
   }
   const otro = E.modo === "inicio" ? "destino" : "inicio";
   E[E.modo] = p;
@@ -872,8 +905,8 @@ function colocarPunto(p) {
 }
 
 function actualizarPuntos() {
-  $("txtInicio").lastChild.textContent = `Inicio: ${E.inicio ? fmtPunto(E.inicio) : "sin elegir"}`;
-  $("txtDestino").lastChild.textContent = `Destino: ${E.destino ? fmtPunto(E.destino) : "sin elegir"}`;
+  $("txtInicio").lastChild.textContent = t("puntoInicio", E.inicio ? fmtPunto(E.inicio) : null);
+  $("txtDestino").lastChild.textContent = t("puntoDestino", E.destino ? fmtPunto(E.destino) : null);
   colocarMarcadores();
 }
 
@@ -887,24 +920,32 @@ function pedirRuta(retardo = 0) {
 async function pedirRutaYa() {
   if (!E.inicio || !E.destino) return;
   const mia = ++E.peticion;
-  mostrarEstado('<span class="giro"></span>Calculando ruta…', false, true);
+  mostrarEstado(() => `<span class="giro"></span>${t("calculando")}`, false, true);
   let res;
   try {
     const r = await fetch("/api/ruta", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ inicio: E.inicio, destino: E.destino, pendiente_maxima: E.tol }) });
     res = await r.json();
   } catch (e) {
-    if (mia === E.peticion) mostrarEstado("No se pudo contactar con el servidor. ¿Sigue abierto visor_rutas.py?", true);
+    if (mia === E.peticion) mostrarEstado(() => t("sinServidor"), true);
     return;
   }
   if (mia !== E.peticion || res.cancelada) return;     // llego una peticion mas nueva
   if (!res.ok) {
     ponerRuta(null);
-    return mostrarEstado(res.error, true);
+    return mostrarEstado(() => errorServidor(res), true);
   }
+  E.rutaBase = null;                                    // ruta normal nueva: se olvida la original
   ponerRuta(res);
   vitales?.nuevaRutaNormal();
-  mostrarEstado(`Ruta con pendiente máxima de ${res.pendiente_maxima}°`);
+  mostrarEstado(() => t("rutaOk", res.pendiente_maxima));
+}
+// Errores del servidor: con `codigo` se traducen; si no (servidor viejo), su texto tal cual
+function errorServidor(res) {
+  if (res.codigo === "fuera_mapa") return t("errFueraMapa", res.punto);
+  if (res.codigo === "sin_datos") return t("errSinDatos", res.punto);
+  if (res.codigo === "sin_ruta") return t("errSinRuta", res.pendiente);
+  return res.error;
 }
 
 // Media movil simetrica: quita el zigzag de la rejilla (8 direcciones) para
@@ -927,6 +968,7 @@ function suavizar(v, radio = 3, pasadas = 2) {
 function ponerRuta(res, emergencia = false) {
   if (!res) {
     E.ruta = null;
+    E.rutaBase = null;
     if (E.siguiendo) salirRecorrido();
   } else {
     const cum = [0];
@@ -946,24 +988,28 @@ function ponerRuta(res, emergencia = false) {
   colorear();
   dibujarRuta3D();
   dibujarPerfil();
+  escribirStats();
+}
+function escribirStats() {
   const st = $("stats");
   st.hidden = !E.ruta;
-  if (E.ruta) {
-    const s = E.ruta.stats, n = (v, d = 0) => v.toLocaleString("es", { maximumFractionDigits: d,
-      minimumFractionDigits: d });
-    const min = s.distancia / 1.2 / 60;            // a ~1,2 m/s caminando con traje
-    st.innerHTML = `
-      <dt>Distancia sobre el terreno</dt><dd>${n(s.distancia)} m</dd>
-      <dt>En línea recta</dt><dd>${n(s.recta)} m</dd>
-      <dt>Desvío</dt><dd>+${n(s.extra_pct, 1)} %</dd>
-      <dt>Subida / bajada</dt><dd>${n(s.subida)} / ${n(s.bajada)} m</dd>
-      <dt>Pendiente máx. / media</dt><dd>${n(s.pend_max, 1)}° / ${n(s.pend_media, 1)}°</dd>
-      <dt>A pie (~1,2 m/s)</dt><dd>${min >= 60 ? `${Math.floor(min / 60)} h ${n(min % 60)} min` : `${n(min)} min`}</dd>`;
-  }
+  if (!E.ruta) return;
+  const s = E.ruta.stats, n = num;
+  const min = s.distancia / 1.2 / 60;            // a ~1,2 m/s caminando con traje
+  st.innerHTML = `
+    <dt>${t("stDist")}</dt><dd>${n(s.distancia)} m</dd>
+    <dt>${t("stRecta")}</dt><dd>${n(s.recta)} m</dd>
+    <dt>${t("stDesvio")}</dt><dd>+${n(s.extra_pct, 1)} %</dd>
+    <dt>${t("stSubida")}</dt><dd>${n(s.subida)} / ${n(s.bajada)} m</dd>
+    <dt>${t("stPend")}</dt><dd>${n(s.pend_max, 1)}° / ${n(s.pend_media, 1)}°</dd>
+    <dt>${t("stPie")}</dt><dd>${min >= 60 ? `${Math.floor(min / 60)} h ${n(min % 60)} min` : `${n(min)} min`}</dd>`;
 }
 
-function mostrarEstado(html, error = false, crudo = false) {
-  const el = $("estado");
+// `texto` puede ser una funcion: asi el mensaje se vuelve a escribir al cambiar de idioma
+let ultimoEstado = null;
+function mostrarEstado(texto, error = false, crudo = false) {
+  ultimoEstado = [texto, error, crudo];
+  const el = $("estado"), html = typeof texto === "function" ? texto() : texto;
   if (crudo) el.innerHTML = html; else el.textContent = html;
   el.classList.toggle("error", error);
 }
@@ -980,16 +1026,20 @@ function descargarCSV() {
 
 // ---------------------------------------------- rutas de emergencia
 // Cambia la ruta en curso por la del refugio (la calculo el servidor).
+// La ruta original se guarda y se sigue dibujando tal cual; la de emergencia va en amarillo.
 function irARefugio(ruta, ref) {
   E.peticion++;                               // anula cualquier ruta normal pendiente
   clearTimeout(temporizador);
+  if (!E.rutaBase && E.ruta) {                // si ya ibamos a otro refugio, se conserva la original
+    E.rutaBase = { ruta: E.ruta, inicio: E.inicio, destino: E.destino };
+  }
   E.inicio = [ruta.x[0], ruta.y[0]];
   E.destino = [ref.x, ref.y];
   E.s = 0;
   ponerRuta(ruta, true);
   actualizarPuntos();
   E.reproduciendo = true;
-  mostrarEstado(`Ruta de emergencia al ${ref.nombre}`);
+  mostrarEstado(() => t("rutaEmergencia", ref));
   actualizarHUD();
 }
 function ponerPolvo(q) {
@@ -1004,6 +1054,9 @@ async function cargarRefugios() {
     E.refugios = meta.refugios;
   } catch (e) { return; }
   pinesRefugio = E.refugios.map((r) => crearPinRefugio(letraRefugio(r)));
+  // Base humana + Starship en cada refugio (base.js), apoyadas en el terreno
+  bases = crearBases({ THREE, escena, sueloMundo, exag: () => E.exag, lift: () => 0.08 + 0.06 * E.exag,
+    aMundoXZ: (x, y) => { const v = aMundo(x, y, M().zmin); return { x: v.x, z: v.z }; } });
   colocarMarcadores();
   $("demo").hidden = false;
   document.body.classList.add("con-demo");
@@ -1012,8 +1065,8 @@ async function cargarRefugios() {
 // --------------------------------------------------- recorrer la ruta
 // Punto de la ruta (suavizada) a una distancia s (m) del inicio, en
 // coordenadas de mundo y con la altura exacta del suelo.
-function enRuta(s, out = new THREE.Vector3()) {
-  const r = E.ruta, n = r.cum.length;
+function enRuta(s, out = new THREE.Vector3(), r = E.ruta) {
+  const n = r.cum.length;
   s = Math.min(Math.max(s, 0), r.total);
   let lo = 0, hi = n - 1;
   while (hi - lo > 1) { const m = (lo + hi) >> 1; if (r.cum[m] <= s) lo = m; else hi = m; }
@@ -1050,7 +1103,7 @@ function entrarRecorrido() {
   controles.enabled = false;
   $("hud").classList.add("visible");
   $("ayudaOrbita").hidden = true; $("ayudaRuta").hidden = false;
-  $("recorrer").textContent = "■ Dejar de recorrer";
+  $("recorrer").textContent = t("dejarRecorrer");
   colorear();                 // quita la ruta pintada en el terreno: se ve la cinta
   colocarMarcadores();
   dibujarPerfil();
@@ -1072,7 +1125,7 @@ function salirRecorrido() {
   camara.fov = 55; camara.updateProjectionMatrix(); actualizarEscalaPuntos();
   $("hud").classList.remove("visible");
   $("ayudaOrbita").hidden = false; $("ayudaRuta").hidden = true;
-  $("recorrer").textContent = "▶ Recorrer ruta";
+  $("recorrer").textContent = t("recorrer");
   colorear();
   colocarMarcadores();
   actualizarModoCasco();
@@ -1104,24 +1157,23 @@ function actualizarHUD() {
   if (!E.ruta) return;
   const i = indiceEn(E.s), r = E.ruta;
   const pend = r.pend[Math.min(i, r.pend.length - 1)] ?? 0;
-  const n = (v) => Math.round(v).toLocaleString("es");
-  $("hudDatos").innerHTML = `<b>${n(E.s)}</b> / ${n(r.total)} m · altura ${n(r.z[i])} m · ` +
-    `pendiente <b style="color:${pend > E.tol * 0.8 ? "var(--peligro)" : "inherit"}">${pend.toFixed(1)}°</b>`;
+  const n = (v) => num(Math.round(v));
+  $("hudDatos").innerHTML = `<b>${n(E.s)}</b> / ${n(r.total)} m · ${t("altura")} ${n(r.z[i])} m · ` +
+    `${t("pendiente")} <b style="color:${pend > E.tol * 0.8 ? "var(--peligro)" : "inherit"}">${num(pend, 1)}°</b>`;
   const V = E.vit;
   if (V && E.refugios) {
-    const nom = { normal: "Normal", precaucion: "Precaución", alerta: "Alerta", critico: "Crítico" }[V.nivel];
     $("vitLinea").className = `nivel-${V.nivel}`;
-    $("vitLinea").innerHTML = V.preparando ? V.preparando
-      : `<b>${nom}</b> · ♥ ${Math.round(V.fc)} · tiempo seguro ${vitales.fmtMin(V.seguro)}` +
-        (V.mejor ? ` · ${V.mejor.ref.nombre} a ${vitales.fmtMin(V.mejor.eta)}` : "") +
+    $("vitLinea").innerHTML = V.preparando ? t("preparando", V.preparando.progreso, V.preparando.total)
+      : t("vitLinea", t("niveles")[V.nivel], Math.round(V.fc), vitales.fmtMin(V.seguro)) +
+        (V.mejor ? ` · ${t("refA", V.mejor.ref, vitales.fmtMin(V.mejor.eta))}` : "") +
         (V.causa ? ` · <span>${V.causa}</span>` : "");
     $("aceptar").hidden = !V.propuesta;
-    if (V.propuesta) $("aceptar").textContent = `Ir al ${V.propuesta.ref.nombre} (A)`;
+    if (V.propuesta) $("aceptar").textContent = t("irRefugio", V.propuesta.ref);
     for (const [id, on] of [["evFatiga", V.fatigaExtra], ["evHipoxia", V.hipoxia],
       ["evTormenta", !!V.tormenta], ["evSolar", !!V.solar]]) $(id).classList.toggle("activo", on);
   }
   $("play").textContent = E.reproduciendo ? "⏸" : "▶";
-  $("camara").textContent = CAMARAS[E.cam];
+  $("camara").textContent = t("camaras")[E.cam];
   $("velEtq").textContent = `${VELOCIDADES[E.vel]} m/s`;
   dibujarCursorPerfil();
 }
@@ -1214,11 +1266,11 @@ function actualizarCursor() {
   const el = $("cursor");
   if (!p) { el.textContent = ""; return; }
   const pd = pendienteMapa(p[0], p[1]);
-  el.innerHTML = `${fmtPunto(p)} · pendiente <b style="color:${pd > E.tol ? "var(--peligro)" : "inherit"}">${pd.toFixed(1)}°</b>`;
+  el.innerHTML = `${fmtPunto(p)} · ${t("pendiente")} <b style="color:${pd > E.tol ? "var(--peligro)" : "inherit"}">${num(pd, 1)}°</b>`;
   const u = E.verGeo ? unidadGeo(p[0], p[1]) : null;
-  if (u) el.innerHTML += ` · geología <b>${u.codigo}</b>`;
+  if (u) el.innerHTML += ` · ${t("geologia")} <b>${u.codigo}</b>`;
   const su = E.verSuelo ? sueloEn(p[0], p[1]) : null;
-  if (su) el.innerHTML += ` · suelo <b>${su.clase.nombre}</b> (inercia ${Math.round(su.ti)})`;
+  if (su) el.innerHTML += ` · ${t("suelo")} <b>${sueloTxt(su.clase).nombre}</b> (${t("inercia")} ${Math.round(su.ti)})`;
 }
 
 // ------------------------------------------------ capa de suelo y polvo
@@ -1238,22 +1290,28 @@ async function cargarSuelo() {
     }
     E.suelo = { ...meta, ti, clase };
   } catch (e) { return; }
-  const esc = (t) => String(t).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
-  const rgb = (c) => `rgb(${c.map((v) => Math.round(v * 255)).join(",")})`;
-  const rango = (c) => c.desde == null ? `< ${c.hasta}` : c.hasta == null ? `≥ ${c.desde}` : `${c.desde}–${c.hasta}`;
-  $("leyendaSuelo").innerHTML = E.suelo.clases.map((c) =>
-    `<div class="unidad"><i style="background:${rgb(c.color)}"></i><div><b>${esc(c.nombre)}</b> · ` +
-    `${c.pct.toLocaleString("es")} %<small>inercia ${rango(c)} · ${esc(c.descripcion)}</small></div></div>`).join("") +
-    `<p class="nota">${esc(E.suelo.fuente_ti)}. Inercia en ${esc(E.suelo.unidades_ti)}. ${esc(E.suelo.nota)}</p>`;
-  const p = E.suelo.polvo;
-  if (p) {
-    $("polvoSup").innerHTML = `Polvo superficial de la zona: <b>${esc(p.nivel)}</b> ` +
-      `(emisividad ${p.emisividad_mediana.toLocaleString("es")}, radio ${p.radio_km} km)` +
-      `<p class="nota">${esc(p.texto)}. ${esc(E.suelo.fuente_polvo)}.</p>`;
-    $("polvoSup").hidden = false;
-  }
+  leyendaSuelo();
   $("grupoSuelo").hidden = false;
   $("verSuelo").onchange = (ev) => ponerCapa("suelo", ev.target.checked);
+}
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+const rgbCss = (c) => `rgb(${c.map((v) => Math.round(v * 255)).join(",")})`;
+function leyendaSuelo() {
+  if (!E.suelo) return;
+  const rango = (c) => c.desde == null ? `< ${c.hasta}` : c.hasta == null ? `≥ ${c.desde}` : `${c.desde}–${c.hasta}`;
+  $("leyendaSuelo").innerHTML = E.suelo.clases.map((c) => {
+    const tx = sueloTxt(c);
+    return `<div class="unidad"><i style="background:${rgbCss(c.color)}"></i><div><b>${esc(tx.nombre)}</b> · ` +
+      `${num(c.pct, 1)} %<small>${t("inercia")} ${rango(c)} · ${esc(tx.descripcion)}</small></div></div>`;
+  }).join("") +
+    `<p class="nota">${esc(notaTxt(E.suelo.fuente_ti))}. ${esc(t("inerciaEn", E.suelo.unidades_ti))} ${esc(notaTxt(E.suelo.nota))}</p>`;
+  const p = E.suelo.polvo;
+  if (p) {
+    const tx = polvoTxt(p);
+    $("polvoSup").innerHTML = t("polvoSup", esc(tx.nivel), num(p.emisividad_mediana, 3), p.radio_km) +
+      `<p class="nota">${esc(tx.texto)}. ${esc(notaTxt(E.suelo.fuente_polvo))}.</p>`;
+    $("polvoSup").hidden = false;
+  }
 }
 
 // Enciende/apaga una capa de color (geologia o suelo); solo una a la vez.
@@ -1275,15 +1333,41 @@ async function cargarGeologia() {
     if (celdas.length !== M().nc * M().nf) return;
     E.geo = { ...meta, celdas };
   } catch (e) { return; }
-  const esc = (t) => String(t).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
-  const rgb = (c) => `rgb(${c.map((v) => Math.round(v * 255)).join(",")})`;
-  $("leyendaGeo").innerHTML = E.geo.unidades.filter((u) => u.pct > 0).map((u) =>
-    `<div class="unidad"><i style="background:${rgb(u.color)}"></i><div><b>${esc(u.codigo)}</b> · ` +
-    `${u.pct.toLocaleString("es")} % del mapa<small>${esc(u.nombre)}, ${esc(u.edad)}</small></div></div>`).join("") +
-    `<p class="nota">${esc(E.geo.fuente)}. ${esc(E.geo.nota)}</p>`;
+  leyendaGeo();
   $("grupoGeo").hidden = false;
   $("verGeo").onchange = (ev) => ponerCapa("geo", ev.target.checked);
 }
+
+function leyendaGeo() {
+  if (!E.geo) return;
+  $("leyendaGeo").innerHTML = E.geo.unidades.filter((u) => u.pct > 0).map((u) => {
+    const tx = geoTxt(u);
+    return `<div class="unidad"><i style="background:${rgbCss(u.color)}"></i><div><b>${esc(u.codigo)}</b> · ` +
+      `${num(u.pct, 1)} ${t("delMapa")}<small>${esc(tx.nombre)}${tx.edad ? `, ${esc(tx.edad)}` : ""}</small></div></div>`;
+  }).join("") +
+    `<p class="nota">${esc(notaTxt(E.geo.fuente))}. ${esc(notaTxt(E.geo.nota))}</p>`;
+}
+
+// ------------------------------------------------------------ idioma
+// Al cambiar de idioma se reescribe todo lo que se genera desde JS
+// (lo que esta en el HTML con data-t lo traduce i18n.js).
+function aplicarIdioma(l) {
+  $("idioma").textContent = l.toUpperCase();
+  document.querySelectorAll("[data-idioma]").forEach((b) => b.classList.toggle("activo", b.dataset.idioma === l));
+  $("recorrer").textContent = t(E.siguiendo ? "dejarRecorrer" : "recorrer");
+  if (ultimoEstado) mostrarEstado(...ultimoEstado);
+  if (!listo) return;                             // aun cargando: lo demas no existe todavia
+  actualizarPuntos();
+  aplicarAtmosfera();
+  escribirStats();
+  leyendaGeo();
+  leyendaSuelo();
+  actualizarHUD();
+  casco?.cambioIdioma();
+}
+alCambiarIdioma(aplicarIdioma);
+document.querySelectorAll("[data-idioma]").forEach((b) => { b.onclick = () => ponerIdioma(b.dataset.idioma); });
+$("idioma").onclick = () => ponerIdioma(idioma() === "es" ? "en" : "es");
 
 // Que Espacio/Enter no vuelvan a "pulsar" el ultimo boton usado
 document.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => b.blur()));
@@ -1324,7 +1408,7 @@ for (const [id, ev] of [["evTormenta", "tormenta"], ["evSolar", "solar"], ["evFa
 $("aceptar").onclick = () => { vitales.aceptar(); actualizarHUD(); };
 
 function cambiarCamara() {
-  E.cam = (E.cam + 1) % CAMARAS.length;
+  E.cam = (E.cam + 1) % N_CAMARAS;
   camara.fov = 55; camara.updateProjectionMatrix(); actualizarEscalaPuntos();
   actualizarHUD();
   actualizarModoCasco();
@@ -1393,6 +1477,7 @@ function cuadro() {
     controles.update();
   }
   if (E.refugios) vitales.actualizar(dt);
+  bases?.actualizar(E.t);
   casco.actualizar(dt);
   actualizarAtmosfera(dt);
   actualizarCursor();
@@ -1402,12 +1487,28 @@ function cuadro() {
 }
 
 // ------------------------------------------------------------ inicio
+// Menu de inicio: se elige el idioma mientras carga el terreno y se entra con
+// "Empezar". Con ?lang=es|en en la URL se salta el menu (enlaces de demo).
+let listo = false;                             // terreno y capas cargados
+const paramIdioma = new URLSearchParams(location.search).get("lang");
+ponerIdioma(paramIdioma || idiomaGuardado() || (navigator.language?.startsWith("en") ? "en" : "es"), !paramIdioma);
+mostrarEstado(() => t("eligePuntos"));
+function cerrarMenu() {
+  $("carga").classList.add("oculto");
+  setTimeout(() => { $("carga").hidden = true; }, 600);
+}
+$("empezar").onclick = cerrarMenu;
+
 async function iniciar() {
   try {
     E.meta = await (await fetch("/api/terreno")).json();
     E.alt = new Float32Array(await (await fetch("/api/alturas")).arrayBuffer());
   } catch (e) {
-    $("carga").textContent = "No se pudo cargar el terreno. ¿Está corriendo visor_rutas.py?";
+    E.meta = null;
+    $("empezar").hidden = true;
+    $("cargaError").hidden = false;
+    $("cargaError").dataset.t = "errorTerreno";
+    $("cargaError").textContent = t("errorTerreno");
     return;
   }
   const m = M();
@@ -1423,6 +1524,7 @@ async function iniciar() {
   pinInicio = crearPin(0x5be36b);
   pinDestino = crearPin(0xff4d5e);
   texCinta = crearTexturaCinta();
+  texCintaEmerg = crearTexturaCinta("rgba(255,204,51,0.26)", "rgba(255,236,140,0.98)");
   astro = crearAstronauta();
   crearCielo();
   crearMotas();
@@ -1444,7 +1546,13 @@ async function iniciar() {
   actualizarEscalaPuntos();
   vistaGeneral();
   $("vel").value = E.vel;
-  $("carga").remove();
+  listo = true;
+  aplicarIdioma(idioma());                     // por si se cambio de idioma mientras cargaba
+  const btn = $("empezar"), etq = btn.querySelector("[data-t]");
+  etq.dataset.t = "menuEmpezar"; etq.textContent = t("menuEmpezar");
+  btn.disabled = false;
+  btn.focus();
+  if (paramIdioma) cerrarMenu();
   lienzo.classList.add("colocando");
   addEventListener("resize", () => { dibujarPerfil(); actualizarEscalaPuntos(); });
   cuadro();
@@ -1453,15 +1561,19 @@ async function iniciar() {
 
 // Permite abrir el visor con una ruta lista, p. ej.
 //   /?inicio=368,10646&destino=6355,1267&pendiente=15&polvo=40&sol=20&recorrer=1
-// (&geologia=1 enciende la capa geologica; &suelo=1 la de tipo de suelo)
+// (&lang=en elige el idioma y salta el menu de inicio;
+//  &geologia=1 enciende la capa geologica; &suelo=1 la de tipo de suelo;
+//  &dist=3 aleja la camara de persecucion/aerea; &giro=90 gira la mirada en grados)
 async function desdeURL() {
   const q = new URLSearchParams(location.search);
   const par = (k) => q.get(k)?.split(",").map(Number);
   if (q.has("pendiente")) { E.tol = +q.get("pendiente"); $("pend").value = E.tol; $("pendVal").textContent = `${E.tol}°`; colorear(); }
   if (q.has("polvo")) { $("polvo").value = q.get("polvo"); E.polvo = q.get("polvo") / 100; }
   if (q.has("sol")) { $("sol").value = q.get("sol"); E.solElev = +q.get("sol"); }
-  if (q.has("camara")) E.cam = +q.get("camara") % CAMARAS.length;
+  if (q.has("camara")) E.cam = +q.get("camara") % N_CAMARAS;
   if (q.has("s")) E.s = +q.get("s");
+  if (q.has("dist")) E.distPersec = Math.max(0.3, Math.min(15, +q.get("dist")));   // alejar camara
+  const giro = q.has("giro") ? +q.get("giro") * Math.PI / 180 : 0;                  // girar la mirada (grados)
   if (q.get("geologia") === "1" && E.geo) ponerCapa("geo", true);
   if (q.get("suelo") === "1" && E.suelo) ponerCapa("suelo", true);
   aplicarAtmosfera();
@@ -1471,6 +1583,7 @@ async function desdeURL() {
   await pedirRutaYa();
   if (q.get("recorrer") === "1" && E.ruta) {
     entrarRecorrido();
+    E.yaw = giro;
     camaraDeseada(ojoAct, objAct);           // empezar ya junto al astronauta
     if (q.has("pausa")) { E.reproduciendo = false; actualizarHUD(); }
   }

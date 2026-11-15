@@ -87,10 +87,13 @@ class Motor:
         celdas = {}
         for nombre, p in (("inicio", ini), ("destino", fin)):
             f, c = self._a_celda(p)
+            # `codigo` (y sus datos) permiten al visor mostrar el error en su idioma
             if not (0 <= f < self.nf and 0 <= c < self.nc):
-                return dict(ok=False, error=f"El {nombre} esta fuera del mapa.")
+                return dict(ok=False, codigo="fuera_mapa", punto=nombre,
+                            error=f"El {nombre} esta fuera del mapa.")
             if np.isnan(self.z[f, c]):
-                return dict(ok=False, error=f"El {nombre} cae en una zona sin datos.")
+                return dict(ok=False, codigo="sin_datos", punto=nombre,
+                            error=f"El {nombre} cae en una zona sin datos.")
             celdas[nombre] = (f, c)
 
         # Un calculo a la vez: si mientras esperabamos llego otra peticion, nos rendimos.
@@ -107,7 +110,7 @@ class Motor:
         if camino is None and costo is None:
             return dict(ok=False, cancelada=True)
         if camino is None:
-            return dict(ok=False, error=(
+            return dict(ok=False, codigo="sin_ruta", pendiente=pend, error=(
                 f"No existe ruta con pendiente maxima de {pend} grados. "
                 "Prueba subir la tolerancia o mover los puntos (puede que uno "
                 "este rodeado de paredes empinadas)."))

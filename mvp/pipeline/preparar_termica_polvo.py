@@ -157,11 +157,11 @@ def polvo_regional(ruta_dci, g):
     emis = np.array(emis)
     med = float(np.median(emis))
     if med >= 0.96:
-        nivel, texto = "bajo", "poca cobertura de polvo: la superficie expone su material real"
+        nivel, texto = "bajo", "la superficie expone su material real, no una capa de polvo"
     elif med >= 0.94:
-        nivel, texto = "moderado", "cobertura de polvo moderada"
+        nivel, texto = "moderado", "hay algo de polvo fino sobre el suelo"
     else:
-        nivel, texto = "alto", "superficie cubierta de polvo fino: la inercia baja puede ser solo polvo"
+        nivel, texto = "alto", "el suelo está cubierto de polvo fino; la inercia baja puede ser solo polvo"
     reparto = {f"{e:.3f}": round(100 * float(np.mean(emis == e)), 1) for e in sorted(set(emis.tolist()))}
     return dict(emisividad_mediana=round(med, 3), nivel=nivel, texto=texto,
                 radio_km=RADIO_POLVO_KM, pixeles=int(emis.size), reparto_pct=reparto,

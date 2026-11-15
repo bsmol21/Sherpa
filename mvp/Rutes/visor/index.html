@@ -186,8 +186,25 @@
   #vitLinea.nivel-alerta b, #vitLinea.nivel-alerta span { color: var(--holo-aviso); }
   #vitLinea.nivel-critico b, #vitLinea.nivel-critico span { color: var(--rojo); }
 
-  #carga { position: fixed; inset: 0; display: grid; place-items: center; background: var(--bg);
-    z-index: 10; font-size: 14px; color: var(--tenue); }
+  /* ------------------------------------------------ menu de inicio */
+  #carga { position: fixed; inset: 0; display: grid; place-items: center; z-index: 10; padding: 16px;
+    background: radial-gradient(ellipse at 50% 120%, #6b3420 0%, #2a130c 45%, var(--bg) 80%); }
+  #carga.oculto { opacity: 0; pointer-events: none; transition: opacity .5s; }
+  .menu { width: min(380px, 100%); text-align: center; display: grid; gap: 14px; }
+  .menu-logo { font-size: 34px; font-weight: 700; letter-spacing: 1px; }
+  .menu-sub { color: var(--tenue); margin-top: -10px; }
+  .menu-etq { color: var(--tenue); font-size: 12px; letter-spacing: 1px; text-transform: uppercase; margin-top: 8px; }
+  .menu-idiomas { display: flex; gap: 10px; }
+  .menu-idiomas button { padding: 14px 10px; font-size: 15px; display: grid; gap: 4px; justify-items: center; }
+  .menu-idiomas button.activo { color: var(--acento); }
+  .bandera-txt { font: 600 11px ui-monospace, monospace; letter-spacing: 2px; opacity: .7; }
+  .menu-nota { color: var(--tenue); font-size: 12px; }
+  #empezar { padding: 12px; font-size: 15px; }
+  #empezar:not(:disabled) .giro { display: none; }
+  .menu-error { color: var(--peligro); font-size: 13px; }
+  .cabecera { display: flex; align-items: center; gap: 8px; }
+  .cabecera h1 { flex: 1; }
+  #idioma { flex: none; padding: 2px 7px; font: 600 11px ui-monospace, monospace; letter-spacing: 1px; }
 </style>
 <script type="importmap">
 { "imports": {
@@ -198,49 +215,63 @@
 </head>
 <body>
 <canvas id="escena"></canvas>
-<div id="carga"><div><span class="giro"></span>Cargando terreno…</div></div>
+<!-- Menu de inicio: idioma (interfaz y voz de Sherpa) y entrar. Tapa la carga del terreno. -->
+<div id="carga">
+  <div class="menu">
+    <div class="menu-logo">PathFinder</div>
+    <div class="menu-sub" data-t="menuSub">Rutas seguras para caminar por Marte</div>
+    <div class="menu-etq" data-t="menuIdioma">Idioma · Language</div>
+    <div class="menu-idiomas">
+      <button data-idioma="es"><span class="bandera-txt">ES</span>Español</button>
+      <button data-idioma="en"><span class="bandera-txt">EN</span>English</button>
+    </div>
+    <div class="menu-nota" data-t="menuVoz">Sherpa te hablará en este idioma (texto y voz).</div>
+    <button id="empezar" class="primario" disabled><span class="giro"></span><span data-t="menuCargando">Cargando terreno…</span></button>
+    <div id="cargaError" class="menu-error" hidden></div>
+  </div>
+</div>
 
 <aside id="panel" class="caja">
-  <h1>PathFinder · Visor de rutas</h1>
-  <p class="sub">Haz clic en el terreno para colocar los puntos. La ruta se recalcula sola.</p>
+  <div class="cabecera"><h1 data-t="titulo">PathFinder · Visor de rutas</h1><button id="idioma" data-t-title="cambiarIdioma" title="Cambiar idioma">ES</button></div>
+  <p class="sub" data-t="panelSub">Haz clic en el terreno para colocar los puntos. La ruta se recalcula sola.</p>
 
-  <div class="etq">Clic coloca</div>
+  <div class="etq" data-t="clicColoca">Clic coloca</div>
   <div class="seg">
-    <button id="modoInicio" class="activo">● Inicio</button>
-    <button id="modoDestino">● Destino</button>
-    <button id="intercambiar" title="Intercambiar inicio y destino" style="flex:none">⇄</button>
+    <button id="modoInicio" class="activo" data-t="btnInicio">● Inicio</button>
+    <button id="modoDestino" data-t="btnDestino">● Destino</button>
+    <button id="intercambiar" data-t-title="intercambiar" title="Intercambiar inicio y destino" style="flex:none">⇄</button>
   </div>
   <div class="punto" id="txtInicio"><i style="background:var(--inicio)"></i>Inicio: sin elegir</div>
   <div class="punto" id="txtDestino"><i style="background:var(--destino)"></i>Destino: sin elegir</div>
 
   <div class="grupo">
-    <div class="etq">Pendiente máxima (tolerancia) <b id="pendVal">15°</b></div>
+    <div class="etq"><span data-t="pendMax">Pendiente máxima (tolerancia)</span> <b id="pendVal">15°</b></div>
     <input id="pend" type="range" min="2" max="60" step="1" value="15">
-    <label class="chk"><input id="verProhibido" type="checkbox" checked> Marcar en rojo las zonas más empinadas que el límite</label>
+    <label class="chk"><input id="verProhibido" type="checkbox" checked> <span data-t="verProhibido">Marcar en rojo las zonas más empinadas que el límite</span></label>
   </div>
 
   <div class="grupo">
-    <div class="etq">Exageración vertical <b id="exagVal">×3</b></div>
+    <div class="etq"><span data-t="exag">Exageración vertical</span> <b id="exagVal">×3</b></div>
     <input id="exag" type="range" min="1" max="10" step="0.5" value="3">
   </div>
 
   <div class="grupo">
-    <div class="etq">Polvo en suspensión <b id="polvoVal">Despejado</b></div>
+    <div class="etq"><span data-t="polvoAire">Polvo en suspensión</span> <b id="polvoVal">Despejado</b></div>
     <input id="polvo" type="range" min="0" max="100" step="1" value="20">
-    <div class="etq" style="margin-top:6px">Altura del sol <b id="solVal">35°</b></div>
+    <div class="etq" style="margin-top:6px"><span data-t="alturaSol">Altura del sol</span> <b id="solVal">35°</b></div>
     <input id="sol" type="range" min="0" max="90" step="1" value="35">
-    <label class="chk"><input id="remolinos" type="checkbox" checked> Remolinos de polvo</label>
+    <label class="chk"><input id="remolinos" type="checkbox" checked> <span data-t="remolinos">Remolinos de polvo</span></label>
   </div>
 
   <!-- Solo aparece si existe datos/procesados/geologia.json -->
   <div class="grupo" id="grupoGeo" hidden>
-    <label class="chk" style="margin-top:0"><input id="verGeo" type="checkbox"> Capa geológica (mapa global USGS)</label>
+    <label class="chk" style="margin-top:0"><input id="verGeo" type="checkbox"> <span data-t="capaGeo">Capa geológica (mapa global USGS)</span></label>
     <div id="leyendaGeo" hidden></div>
   </div>
 
   <!-- Solo aparece si existe datos/procesados/suelo.json -->
   <div class="grupo" id="grupoSuelo" hidden>
-    <label class="chk" style="margin-top:0"><input id="verSuelo" type="checkbox"> Tipo de suelo (inercia térmica THEMIS)</label>
+    <label class="chk" style="margin-top:0"><input id="verSuelo" type="checkbox"> <span data-t="capaSuelo">Tipo de suelo (inercia térmica THEMIS)</span></label>
     <div id="leyendaSuelo" hidden></div>
     <div id="polvoSup" hidden></div>
   </div>
@@ -252,22 +283,12 @@
 
   <div class="grupo seg">
     <button id="recorrer" class="primario" disabled>▶ Recorrer ruta</button>
-    <button id="general" style="flex:none" title="Vista general del mapa">⌂</button>
-    <button id="csv" style="flex:none" disabled title="Descargar la ruta como CSV">CSV</button>
+    <button id="general" style="flex:none" data-t-title="vistaGeneral" title="Vista general del mapa">⌂</button>
+    <button id="csv" style="flex:none" disabled data-t-title="descargarCsv" title="Descargar la ruta como CSV">CSV</button>
   </div>
 
-  <div class="grupo ayuda" id="ayudaOrbita">
-    <b>Explorar:</b> arrastra para girar, clic derecho para desplazar, rueda para acercar.
-    <kbd>R</kbd> recorre la ruta.
-  </div>
-  <div class="grupo ayuda" id="ayudaRuta" hidden>
-    <b>Recorriendo:</b> rueda = acercar/alejar · <kbd>Espacio</kbd> pausa · <kbd>←</kbd><kbd>→</kbd> avanzar/retroceder
-    (<kbd>Shift</kbd> = más) · <kbd>↑</kbd><kbd>↓</kbd> velocidad · <kbd>C</kbd> cámara ·
-    arrastra para mirar alrededor · doble clic centra la mirada · <kbd>Esc</kbd> salir.
-    En primera persona: <kbd>V</kbd> voz de Sherpa · <kbd>Tab</kbd> mostrar este panel.
-    Simular: <kbd>1</kbd> tormenta · <kbd>2</kbd> evento solar · <kbd>3</kbd> fatiga · <kbd>4</kbd> SpO₂ baja ·
-    <kbd>0</kbd> reiniciar · <kbd>A</kbd> aceptar ruta al refugio.
-  </div>
+  <div class="grupo ayuda" id="ayudaOrbita" data-t-html="ayudaOrbita"></div>
+  <div class="grupo ayuda" id="ayudaRuta" data-t-html="ayudaRuta" hidden></div>
 </aside>
 
 <div id="minimapa" class="caja"><canvas id="mini"></canvas></div>
@@ -298,7 +319,7 @@
         <circle cx="30" cy="14" r="2" fill="currentColor"/>
       </svg>
       <div class="sh-cuerpo">
-        <div class="sh-nombre">SHERPA <span>asistente de ruta</span><button id="hcVoz" title="Activar o silenciar la voz (V)">voz: no</button></div>
+        <div class="sh-nombre">SHERPA <span data-t="asistente">asistente de ruta</span><button id="hcVoz" title="Activar o silenciar la voz (V)">voz: no</button></div>
         <div id="hcSherpaTxt"><span class="tenue">En línea · siguiendo la ruta</span></div>
       </div>
     </div>
@@ -324,23 +345,23 @@
 
 <div id="hud" class="caja">
   <div class="fila">
-    <button id="play" title="Reproducir / pausar (Espacio)">⏸</button>
-    <button id="camara" title="Cambiar cámara (C)">Primera persona</button>
+    <button id="play" data-t-title="tPlay" title="Reproducir / pausar (Espacio)">⏸</button>
+    <button id="camara" data-t-title="tCamara" title="Cambiar cámara (C)">Primera persona</button>
     <div id="hudDatos"></div>
-    <input id="vel" type="range" min="0" max="8" step="1" value="3" title="Velocidad (↑/↓)">
+    <input id="vel" type="range" min="0" max="8" step="1" value="3" data-t-title="tVel" title="Velocidad (↑/↓)">
     <span id="velEtq"></span>
-    <button id="salir" title="Salir del recorrido (Esc)">✕</button>
+    <button id="salir" data-t-title="tSalir" title="Salir del recorrido (Esc)">✕</button>
   </div>
-  <canvas id="perfil" title="Haz clic o arrastra para saltar a un punto de la ruta"></canvas>
+  <canvas id="perfil" data-t-title="tPerfil" title="Haz clic o arrastra para saltar a un punto de la ruta"></canvas>
   <!-- Solo aparece si existe datos/procesados/refugios.json -->
   <div id="demo" class="fila" hidden>
     <div id="vitLinea"></div>
-    <span class="tit">Simular:</span>
-    <button id="evTormenta" title="Tormenta de polvo (1)">⛈ Tormenta</button>
-    <button id="evSolar" title="Evento de partículas solares (2)">☢ Evento solar</button>
-    <button id="evFatiga" title="Agotamiento (3)">♥ Fatiga</button>
-    <button id="evHipoxia" title="Baja de oxígeno en sangre (4)">SpO₂ ↓</button>
-    <button id="evReiniciar" title="Reiniciar signos vitales y clima (0)">↺</button>
+    <span class="tit" data-t="simular">Simular:</span>
+    <button id="evTormenta" data-t="evTormenta" data-t-title="tTormenta" title="Tormenta de polvo (1)">⛈ Tormenta</button>
+    <button id="evSolar" data-t="evSolar" data-t-title="tSolar" title="Evento de partículas solares (2)">☢ Evento solar</button>
+    <button id="evFatiga" data-t="evFatiga" data-t-title="tFatiga" title="Agotamiento (3)">♥ Fatiga</button>
+    <button id="evHipoxia" data-t-title="tHipoxia" title="Baja de oxígeno en sangre (4)">SpO₂ ↓</button>
+    <button id="evReiniciar" data-t-title="tReiniciar" title="Reiniciar signos vitales y clima (0)">↺</button>
     <button id="aceptar" hidden>Ir al refugio (A)</button>
   </div>
 </div>
