@@ -17,6 +17,7 @@ const E = {
   meta: null, alt: null, pendCelda: null,       // terreno
   exag: 3, tol: 15, verProhibido: true,
   geo: null, verGeo: false,                     // capa geologica opcional {unidades, celdas, ...}
+  suelo: null, verSuelo: false,                 // capa opcional de suelo {clases, ti, clase, polvo, ...}
   modo: "inicio", inicio: null, destino: null,  // puntos en metros [x, y]
   ruta: null,                                   // {x,y,z,pend,cum,total,stats,sx,sy,celdas}
   peticion: 0,
@@ -104,6 +105,15 @@ function unidadGeo(xm, ym) {
   if (c < 0 || r < 0 || c >= nc || r >= nf) return null;
   return E.geo.unidades[E.geo.celdas[r * nc + c] - 1] ?? null;
 }
+// Suelo en un punto del mapa: {ti, clase} o null (sin capa o sin dato).
+function sueloEn(xm, ym) {
+  if (!E.suelo) return null;
+  const { nc, nf, celda } = M();
+  const c = Math.round(xm / celda - 0.5), r = Math.round((M().alto - ym) / celda - 0.5);
+  if (c < 0 || r < 0 || c >= nc || r >= nf) return null;
+  const i = r * nc + c, clase = E.suelo.clases[E.suelo.clase[i] - 1];
+  return clase ? { ti: E.suelo.ti[i], clase } : null;
+}
 
 // ------------------------------------------------------------- terreno
 let malla, colores, mini, pesoRuta;
@@ -187,12 +197,17 @@ function colorear() {
   // recorrido se ve la cinta con flechas, que es mas nitida de cerca.
   const pintarRuta = E.ruta && !E.siguiendo;
   const geo = E.verGeo && E.geo ? E.geo : null;
+  const sue = E.verSuelo && E.suelo ? E.suelo : null;
   for (let i = 0; i < a.length; i++) {
     if (isNaN(a[i])) { img[4 * i + 3] = 0; continue; }
     rampa((a[i] - zmin) / (zmax - zmin), rgb);
     if (geo) {                                   // tinte de la unidad geologica
       const u = geo.unidades[geo.celdas[i] - 1];
       if (u) for (let j = 0; j < 3; j++) rgb[j] += (u.color[j] - rgb[j]) * 0.4;
+    }
+    if (sue) {                                   // tinte del tipo de suelo
+      const cl = sue.clases[sue.clase[i] - 1];
+      if (cl) for (let j = 0; j < 3; j++) rgb[j] += (cl.color[j] - rgb[j]) * 0.45;
     }
     if (E.verProhibido) {
       const m = p[i] > E.tol ? [rojo, 0.62] : p[i] > E.tol * 0.8 ? [ambar, 0.28] : null;
@@ -1082,6 +1097,52 @@ function actualizarCursor() {
   el.innerHTML = `${fmtPunto(p)} · pendiente <b style="color:${pd > E.tol ? "var(--peligro)" : "inherit"}">${pd.toFixed(1)}°</b>`;
   const u = E.verGeo ? unidadGeo(p[0], p[1]) : null;
   if (u) el.innerHTML += ` · geología <b>${u.codigo}</b>`;
+  const su = E.verSuelo ? sueloEn(p[0], p[1]) : null;
+  if (su) el.innerHTML += ` · suelo <b>${su.clase.nombre}</b> (inercia ${Math.round(su.ti)})`;
+}
+
+// ------------------------------------------------ capa de suelo y polvo
+// Opcional: si el servidor no la tiene, el visor queda igual que siempre.
+// Las capas de geologia y suelo tiñen el terreno; se muestra una a la vez.
+async function cargarSuelo() {
+  try {
+    const meta = await (await fetch("/api/suelo")).json();
+    if (!meta.disponible) return;
+    const ti = new Float32Array(await (await fetch("/api/suelo_ti")).arrayBuffer());
+    if (ti.length !== M().nc * M().nf) return;
+    const clase = new Uint8Array(ti.length);           // 0 = sin dato
+    for (let i = 0; i < ti.length; i++) {
+      if (Number.isNaN(ti[i])) continue;
+      const k = meta.clases.findIndex((c) => c.hasta == null || ti[i] < c.hasta);
+      clase[i] = k + 1;
+    }
+    E.suelo = { ...meta, ti, clase };
+  } catch (e) { return; }
+  const esc = (t) => String(t).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+  const rgb = (c) => `rgb(${c.map((v) => Math.round(v * 255)).join(",")})`;
+  const rango = (c) => c.desde == null ? `< ${c.hasta}` : c.hasta == null ? `≥ ${c.desde}` : `${c.desde}–${c.hasta}`;
+  $("leyendaSuelo").innerHTML = E.suelo.clases.map((c) =>
+    `<div class="unidad"><i style="background:${rgb(c.color)}"></i><div><b>${esc(c.nombre)}</b> · ` +
+    `${c.pct.toLocaleString("es")} %<small>inercia ${rango(c)} · ${esc(c.descripcion)}</small></div></div>`).join("") +
+    `<p class="nota">${esc(E.suelo.fuente_ti)}. Inercia en ${esc(E.suelo.unidades_ti)}. ${esc(E.suelo.nota)}</p>`;
+  const p = E.suelo.polvo;
+  if (p) {
+    $("polvoSup").innerHTML = `Polvo superficial de la zona: <b>${esc(p.nivel)}</b> ` +
+      `(emisividad ${p.emisividad_mediana.toLocaleString("es")}, radio ${p.radio_km} km)` +
+      `<p class="nota">${esc(p.texto)}. ${esc(E.suelo.fuente_polvo)}.</p>`;
+    $("polvoSup").hidden = false;
+  }
+  $("grupoSuelo").hidden = false;
+  $("verSuelo").onchange = (ev) => ponerCapa("suelo", ev.target.checked);
+}
+
+// Enciende/apaga una capa de color (geologia o suelo); solo una a la vez.
+function ponerCapa(cual, on) {
+  E.verGeo = cual === "geo" && on;
+  E.verSuelo = cual === "suelo" && on;
+  if ($("verGeo")) { $("verGeo").checked = E.verGeo; $("leyendaGeo").hidden = !E.verGeo; }
+  $("verSuelo").checked = E.verSuelo; $("leyendaSuelo").hidden = !E.verSuelo;
+  colorear();
 }
 
 // ------------------------------------------------------ capa geologica
@@ -1101,11 +1162,7 @@ async function cargarGeologia() {
     `${u.pct.toLocaleString("es")} % del mapa<small>${esc(u.nombre)}, ${esc(u.edad)}</small></div></div>`).join("") +
     `<p class="nota">${esc(E.geo.fuente)}. ${esc(E.geo.nota)}</p>`;
   $("grupoGeo").hidden = false;
-  $("verGeo").onchange = (ev) => {
-    E.verGeo = ev.target.checked;
-    $("leyendaGeo").hidden = !E.verGeo;
-    colorear();
-  };
+  $("verGeo").onchange = (ev) => ponerCapa("geo", ev.target.checked);
 }
 
 // Que Espacio/Enter no vuelvan a "pulsar" el ultimo boton usado
@@ -1240,7 +1297,7 @@ async function iniciar() {
   crearBocanadas();
   crearRemolinos();
   casco = crearCasco({ THREE, E, M, $, camara, enRuta, indiceEn, aMapa, sueloMundo, remolinos,
-    crearAstronauta, animarCaminata, VELOCIDADES, unidadGeo });
+    crearAstronauta, animarCaminata, VELOCIDADES, unidadGeo, sueloEn });
   E.polvo = $("polvo").value / 100; E.solElev = +$("sol").value; E.remolinos = $("remolinos").checked;
   aplicarAtmosfera();
 
@@ -1248,6 +1305,7 @@ async function iniciar() {
   crearMinimapa();
   construirTerreno();
   await cargarGeologia();
+  await cargarSuelo();
   redimensionar();
   actualizarEscalaPuntos();
   vistaGeneral();
@@ -1261,7 +1319,7 @@ async function iniciar() {
 
 // Permite abrir el visor con una ruta lista, p. ej.
 //   /?inicio=368,10646&destino=6355,1267&pendiente=15&polvo=40&sol=20&recorrer=1
-// (&geologia=1 enciende la capa geologica)
+// (&geologia=1 enciende la capa geologica; &suelo=1 la de tipo de suelo)
 async function desdeURL() {
   const q = new URLSearchParams(location.search);
   const par = (k) => q.get(k)?.split(",").map(Number);
@@ -1270,7 +1328,8 @@ async function desdeURL() {
   if (q.has("sol")) { $("sol").value = q.get("sol"); E.solElev = +q.get("sol"); }
   if (q.has("camara")) E.cam = +q.get("camara") % CAMARAS.length;
   if (q.has("s")) E.s = +q.get("s");
-  if (q.get("geologia") === "1" && E.geo) { $("verGeo").checked = true; $("verGeo").onchange({ target: $("verGeo") }); }
+  if (q.get("geologia") === "1" && E.geo) ponerCapa("geo", true);
+  if (q.get("suelo") === "1" && E.suelo) ponerCapa("suelo", true);
   aplicarAtmosfera();
   if (!par("inicio") || !par("destino")) return;
   E.inicio = par("inicio"); E.destino = par("destino"); ponerModo("destino");

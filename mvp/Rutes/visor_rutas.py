@@ -29,6 +29,7 @@ import numpy as np
 
 import geologia
 import ruta_optima as ro
+import suelo
 
 PUERTO = 8765
 CARPETA_WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "visor")
@@ -139,8 +140,9 @@ class Motor:
                 costo=float(costo)))
 
 
-def crear_handler(motor, geo=None):
-    """`geo` es la capa geologica opcional (ver geologia.py); None = sin capa."""
+def crear_handler(motor, geo=None, sue=None):
+    """`geo` y `sue` son las capas opcionales de geologia y de suelo/polvo
+    (ver geologia.py y suelo.py); None = sin esa capa."""
     alturas = motor.z.astype("<f4").tobytes()   # NaN = sin datos
 
     class Handler(SimpleHTTPRequestHandler):
@@ -177,6 +179,15 @@ def crear_handler(motor, geo=None):
                 self.send_header("Content-Length", str(len(geo["celdas"])))
                 self.end_headers()
                 self.wfile.write(geo["celdas"])
+                return
+            if self.path == "/api/suelo":
+                return self._json(sue["meta"] if sue else dict(disponible=False))
+            if self.path == "/api/suelo_ti" and sue:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Length", str(len(sue["ti"])))
+                self.end_headers()
+                self.wfile.write(sue["ti"])
                 return
             return super().do_GET()
 
@@ -223,6 +234,12 @@ def main():
     if geo:
         print("Capa geologica: " + ", ".join(
             f"{u['codigo']} {u['pct']:.0f} %" for u in geo["meta"]["unidades"]))
+    sue = suelo.cargar(motor.z, motor.celda)        # opcional: None si no hay capa
+    if sue:
+        p = sue["meta"]["polvo"]
+        print("Capa de suelo: " + ", ".join(
+            f"{c['nombre']} {c['pct']:.0f} %" for c in sue["meta"]["clases"]) +
+            (f"  |  polvo superficial {p['nivel']}" if p else ""))
 
     url = f"http://127.0.0.1:{PUERTO}/"
     # En Windows, SO_REUSEADDR deja abrir dos servidores en el mismo puerto sin error
@@ -230,7 +247,7 @@ def main():
     if os.name == "nt":
         ThreadingHTTPServer.allow_reuse_address = False
     try:
-        servidor = ThreadingHTTPServer(("127.0.0.1", PUERTO), crear_handler(motor, geo))
+        servidor = ThreadingHTTPServer(("127.0.0.1", PUERTO), crear_handler(motor, geo, sue))
     except OSError:
         print(f"\nEl puerto {PUERTO} ya esta en uso: probablemente el visor ya esta abierto "
               f"en otra ventana. Abriendo {url} ...")

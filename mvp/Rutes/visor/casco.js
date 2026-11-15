@@ -160,10 +160,13 @@ export function crearCasco(ctx) {
   }
 
   // Geologia (solo si el visor tiene la capa geologica; si no, no hace nada).
-  // Sherpa dice sobre que unidad caminas y avisa al cruzar a otra. Espera a
-  // que la cola este casi vacia para no tapar los avisos de ruta y de riesgo.
-  const PAUSA_GEO = 20;           // s minimos entre dos comentarios de geologia
-  const geo = { dicho: null, t: -Infinity };
+  // Sherpa dice sobre que unidad caminas y avisa al cruzar a otra. Solo habla
+  // cuando Sherpa esta callado y sin nada en cola: asi no tapa los avisos de
+  // ruta y de riesgo, y la unidad que nombra es la de ese mismo momento.
+  const PAUSA_INFO = 20;          // s minimos entre dos comentarios informativos (geologia, suelo)
+  const geo = { dicho: null };
+  const info = { t: -Infinity };
+  const libreParaInfo = () => !sh.txt && !sh.cola.length && E.t - info.t >= PAUSA_INFO;
   function unidadAqui() {
     if (!ctx.unidadGeo) return null;
     const p = enRuta(E.s);
@@ -171,13 +174,57 @@ export function crearCasco(ctx) {
   }
   function vigilarGeologia() {
     const u = unidadAqui();
-    if (!u || u.id === geo.dicho || sh.cola.length > 1 || E.t - geo.t < PAUSA_GEO) return;
+    if (!u || u.id === geo.dicho || !libreParaInfo()) return;
     const edad = u.edad ? `, de ${u.edad}` : "";
     decir(geo.dicho === null
       ? `Geología: caminas sobre la ${u.nombre}${edad}.`
       : `Según el mapa geológico, aquí cambia el terreno: entras en la ${u.nombre}${edad}. ` +
         `${u.interes} Buen punto para tomar una muestra.`.trim());
-    geo.dicho = u.id; geo.t = E.t;
+    geo.dicho = u.id; info.t = E.t;
+  }
+
+  // Suelo (inercia termica) y polvo superficial: solo si el visor tiene la capa.
+  //  - Advertencia si hay material fino suelto en los proximos 100 m de ruta.
+  //  - Informativo (cuando Sherpa esta libre): resumen del suelo y del polvo al
+  //    empezar, y aviso al pisar suelo rocoso o cementado.
+  function sueloAqui() {
+    if (!ctx.sueloEn) return null;
+    const p = enRuta(E.s);
+    return ctx.sueloEn(...aMapa(p.x, p.z));
+  }
+  function sueloSueltoAdelante() {
+    if (!ctx.sueloEn) return null;
+    const r = E.ruta;
+    for (let i = indiceEn(E.s); i < r.x.length && r.cum[i] < E.s + 100; i++) {
+      const su = ctx.sueloEn(r.x[i], r.y[i]);
+      if (su && su.clase.riesgo === "alto") return { d: Math.max(0, r.cum[i] - E.s), i, su };
+    }
+    return null;
+  }
+  const sue = { resumen: false, clave: null };
+  function vigilarSuelo() {
+    const suelto = sueloSueltoAdelante();
+    if (suelto) {
+      decir(suelto.d < 10 ? `Pisas ${suelto.su.clase.nombre}: riesgo de hundirte. Paso corto y firme.`
+        : `${suelto.su.clase.nombre[0].toUpperCase() + suelto.su.clase.nombre.slice(1)} en ` +
+          `${fmtDist(suelto.d)}: riesgo de hundirte. Paso corto y firme.`,
+        `suelto${Math.floor(suelto.i / 15)}`);
+    }
+    const su = sueloAqui();
+    if (!su || !libreParaInfo()) return;
+    if (!sue.resumen) {
+      const p = E.suelo?.polvo;
+      decir(`Suelo: la inercia térmica indica ${su.clase.nombre} bajo tus pies.` +
+        (p ? ` Polvo superficial ${p.nivel} en la zona: ${p.texto}.` : ""));
+      sue.resumen = true; info.t = E.t;
+      return;
+    }
+    if (su.clase.clave === "roca") {
+      const clave = `roca${Math.floor(E.s / 300)}`;
+      if (clave === sue.clave || sh.vistos.has(clave)) return;
+      decir(`Pisas ${su.clase.nombre}: apoyo firme. La roca expuesta es buen punto para tomar una muestra.`, clave);
+      sue.clave = clave; info.t = E.t;
+    }
   }
 
   // Sucesos que comenta Sherpa (se revisan 10 veces por segundo)
@@ -186,6 +233,8 @@ export function crearCasco(ctx) {
     const r = E.ruta, total = r.total, falta = total - E.s;
     decir(`Hola, soy Sherpa. Te guiaré por ${fmtDist(total)} de ruta, unas ${fmtTiempo(total)} a pie. ` +
       "Sigue al holograma.", "hola");
+    vigilarGeologia();
+    vigilarSuelo();
     if (falta <= 1) return decir("Has llegado al destino. Buen trabajo.", "fin", true);
     if (falta < 150) decir(`El destino está a ${fmtDist(falta)}.`, "casi");
     for (const h of [25, 50, 75]) {
@@ -219,7 +268,6 @@ export function crearCasco(ctx) {
           `rem${ctx.remolinos.indexOf(rem)}-${u.id}`);
       }
     }
-    vigilarGeologia();
   }
 
   // ------------------------------------------------------- HUD
@@ -323,7 +371,7 @@ export function crearCasco(ctx) {
   function escribirDatos(giro, cuesta, t) {
     const r = E.ruta, falta = Math.max(0, r.total - E.s), i = indiceEn(E.s);
     const pend = r.pend[Math.min(i, r.pend.length - 1)] ?? 0;
-    const ug = unidadAqui();
+    const ug = unidadAqui(), su = sueloAqui();
     $("hcRuta").innerHTML = `<h3>RUTA</h3>
       <div class="fila-hc"><span>Recorrido</span><b>${fmtDist(E.s)}</b></div>
       ${barra(E.s / r.total * 100)}
@@ -332,7 +380,8 @@ export function crearCasco(ctx) {
       <div class="fila-hc"><span>Altitud</span><b>${Math.round(r.z[i])} m</b></div>
       <div class="fila-hc"><span>Pendiente</span><b class="${pend > E.tol * 0.8 ? "aviso" : ""}">${pend.toFixed(1)}° / ${E.tol}°</b></div>
       ${barra(pend / E.tol * 100, pend > E.tol * 0.8)}
-      ${ug ? `<div class="fila-hc"><span>Geología</span><b>${ug.codigo}</b></div>` : ""}`;
+      ${ug ? `<div class="fila-hc"><span>Geología</span><b>${ug.codigo}</b></div>` : ""}
+      ${su ? `<div class="fila-hc"><span>Suelo</span><b class="${su.clase.riesgo === "alto" ? "aviso" : ""}">${su.clase.clave} · ${Math.round(su.ti)}</b></div>` : ""}`;
     $("hcTraje").innerHTML = `<h3>TRAJE</h3>
       <div class="fila-hc"><span>O₂</span><b class="${t.o2 < 30 ? "aviso" : ""}">${Math.round(t.o2)} %</b></div>
       ${barra(t.o2, t.o2 < 30)}
